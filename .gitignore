@@ -1,0 +1,4 @@
+# JetBrains
+.idea/
+## CMake
+cmake-build-*/
