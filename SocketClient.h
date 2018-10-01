@@ -80,7 +80,7 @@ public:
 
     public:
         Socket(CriticalList<Socket> &l, SocketClient *c, SOCKET s_, int af_)  : ListElt(l),
-                                                                                s(s_), af(af_), closing(false),
+                                                                                s(s_), af(af_), state(SocketState::INIT),
                                                                                 OutstandingRecv(0), OutstandingSend(0),
                                                                                 SockCritSec{}, client(c) {
             InitializeCriticalSection(&SockCritSec);
@@ -91,9 +91,18 @@ public:
         static void Delete(Socket *obj);        // Close socket before deleting it
 
     private:
+        enum SocketState {
+            INIT,
+            ASSOCIATED,
+            BOUND,
+            CONNECTED,
+            CLOSING,
+            FAILURE
+        };
+
         SOCKET                      s;                      // Socket handle
+        SocketState                 state;                  //state the socket is in
         int                         af;                     // Address family of socket
-        bool                        closing;                // Is the socket closing?
         volatile LONG               OutstandingRecv,        // Number of outstanding overlapped ops on
                                     OutstandingSend;
         CRITICAL_SECTION            SockCritSec;            // Protect access to this structure

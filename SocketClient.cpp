@@ -5,15 +5,10 @@
 #endif
 
 //TODO reusable socket with another list and Disconnectex
-//TODO manage incomplete WSASend
-// Post another WSASend() request.
-// Since WSASend() is not guaranteed to send all of the bytes requested,
-// continue posting WSASend() calls until all received bytes are sent.
-//How you proceed from this point depends on the error (temporary resource limit or hard network fault) and how many other WSASends you have pending on that socket (zero or non-zero). You can only try and send the rest of the data if you have a temporary resource error and no other outstanding WSASend calls for this socket
-//if you DO have other WSASend calls pending then you should probably abort the connection as you may have garbled your data stream by sending part of the buffer from this WSASend call and then all (or part) of a subsequent WSASend call.
 //TODO max send to avoid consuming all resources
 //TODO use SIO_IDEAL_SEND_BACKLOG_QUERY and SIO_IDEAL_SEND_BACKLOG_CHANGE
 //TODO manage socket server as well
+//TODO remove all uneeded lines
 
 template<typename T>
 template<typename... Args>
@@ -56,6 +51,7 @@ void SocketClient::ListElt<T>::ClearList(SocketClient::CriticalList<T> &critList
 
 void SocketClient::Socket::Delete(Socket *obj) {
     EnterCriticalSection(&obj->SockCritSec);
+    //TODO change depending on socket state
     // Close the socket if it hasn't already been closed
     if (obj->s != INVALID_SOCKET) {
         _cprintf("Socket::Delete: closing socket\n");
@@ -86,6 +82,8 @@ int SocketClient::ReceiveData(const char *data, size_t len, Socket *socket) {
 }
 
 void SocketClient::SendData(const char *data, size_t len, Socket *socket) {
+    if (socket->state != Socket::SocketState::CONNECTED)
+        return;
     _cprintf("send %s\n", data);
 
     while(len > 0){
@@ -96,7 +94,11 @@ void SocketClient::SendData(const char *data, size_t len, Socket *socket) {
         sendobj->buflen = currentLen;
 
         if(PostSend(socket, sendobj) == SOCKET_ERROR){
-            socket->closing = true;
+            EnterCriticalSection(&socket->SockCritSec);
+            {
+                socket->state = Socket::SocketState::FAILURE;
+            }
+            LeaveCriticalSection(&socket->SockCritSec);
             Buffer::Delete(sendobj);
             break;
         }
@@ -212,16 +214,26 @@ void SocketClient::HandleIo(Socket *sockobj, Buffer *buf, DWORD BytesTransfered)
             buf->buflen = BytesTransfered;
             ReceiveData(buf->buf, buf->buflen, sockobj);
             buf->buflen = DEFAULT_BUFFER_SIZE;
-            if(PostRecv(sockobj, buf) == SOCKET_ERROR) {
+            if (sockobj->state != Socket::SocketState::CONNECTED)
+                Buffer::Delete(buf);
+            else if(PostRecv(sockobj, buf) == SOCKET_ERROR) {
                 _cprintf("HandleIo: PostRecv failed!\n");
-                sockobj->closing = true;
+                EnterCriticalSection(&sockobj->SockCritSec);
+                {
+                    sockobj->state = Socket::SocketState::FAILURE;
+                }
+                LeaveCriticalSection(&sockobj->SockCritSec);
                 Buffer::Delete(buf);
             }
         }
         else {
             _cprintf("Received 0 byte\n");
             // Graceful close - the receive returned 0 bytes read
-            sockobj->closing = true;
+            EnterCriticalSection(&sockobj->SockCritSec);
+            {
+                sockobj->state = Socket::SocketState::CLOSING;
+            }
+            LeaveCriticalSection(&sockobj->SockCritSec);
             // Free the receive buffer
             Buffer::Delete(buf);
         }
@@ -235,17 +247,34 @@ void SocketClient::HandleIo(Socket *sockobj, Buffer *buf, DWORD BytesTransfered)
             sockobj->OutstandingSend--;
         }
         LeaveCriticalSection(&sockobj->SockCritSec);
+        if (BytesTransfered < buf->buflen){ //incomplete send, very small chance of it ever happening, socket send stream most probably corrupted
+            EnterCriticalSection(&sockobj->SockCritSec);
+            {
+                sockobj->state = Socket::SocketState::FAILURE;
+            }
+            LeaveCriticalSection(&sockobj->SockCritSec);
+        }
+
 //        InterlockedExchangeAdd(&bytesSent, BytesTransfered);
 
         Buffer::Delete(buf);
     }
     else if (buf->operation == Operation::Connect || buf->operation == Operation::Accept ) {
+        EnterCriticalSection(&sockobj->SockCritSec);
+        {
+            sockobj->state = Socket::SocketState::CONNECTED;
+        }
+        LeaveCriticalSection(&sockobj->SockCritSec);
         _cprintf("connected\n");
         // ----------------------------- trigger first recv
         buf->operation = Operation::Read;
         if(PostRecv(sockobj, buf) == SOCKET_ERROR){
             _cprintf("HandleIo: PostRecv failed!\n");
-            sockobj->closing = true;
+            EnterCriticalSection(&sockobj->SockCritSec);
+            {
+                sockobj->state = Socket::SocketState::FAILURE;
+            }
+            LeaveCriticalSection(&sockobj->SockCritSec);
             Buffer::Delete(buf);
         }
     }
@@ -256,7 +285,7 @@ void SocketClient::HandleIo(Socket *sockobj, Buffer *buf, DWORD BytesTransfered)
     // If this was the last outstanding operation on closing socket, clean it up
     EnterCriticalSection(&sockobj->SockCritSec);
     {
-        if ((sockobj->OutstandingSend == 0) && (sockobj->OutstandingRecv == 0) && (sockobj->closing)) {
+        if ((sockobj->OutstandingSend == 0) && (sockobj->OutstandingRecv == 0) && (sockobj->state > Socket::SocketState::CONNECTED)) {
             cleanupSocket = true;
         }
     }
@@ -453,6 +482,7 @@ SocketClient::Socket* SocketClient::ListenToNewSocket(const char *address, u_sho
         Socket::Delete(sockObj);
         return nullptr;
     }
+    sockObj->state = Socket::SocketState::ASSOCIATED;
     _cprintf("CreateIoCompletionPort ok\n");
 
     // ----------------------------- bind socket
@@ -469,6 +499,8 @@ SocketClient::Socket* SocketClient::ListenToNewSocket(const char *address, u_sho
         Socket::Delete(sockObj);
         return nullptr;
     }
+    _cprintf("bind ok\n");
+    sockObj->state = Socket::SocketState::BOUND;
 
     // ----------------------------- connect socket
     SockAddr.sin_addr.s_addr = inet_addr(address);
