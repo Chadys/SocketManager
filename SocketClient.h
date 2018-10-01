@@ -1,6 +1,7 @@
 #ifndef SOCKETCLIENT_SOCKETCLIENT_H
 #define SOCKETCLIENT_SOCKETCLIENT_H
 #include <winsock2.h>
+#include <mswsock.h>
 #include <windows.h>
 #include <conio.h>
 #include <lm.h>
@@ -29,12 +30,16 @@ private:
         IOCP_INITIALIZED,
         CRIT_SEC_INITIALIZED,
         THREADS_INITIALIZED,
+        MSWSOCK_FUNC_INITIALIZED,
         READY
     };
 
     enum Operation {
         Read,
         Write,
+        Connect,
+        Disconnect,
+        Accept,
         End
     };
 
@@ -130,6 +135,10 @@ private:
     std::vector<HANDLE>     threadHandles;              // Handles to all threads receiving IOCP events
     HANDLE                  iocpHandle;                 // Handle to IO completion port
 
+    LPFN_CONNECTEX          ConnectEx               = nullptr;
+    LPFN_DISCONNECTEX       DisconnectEx            = nullptr;
+    LPFN_ACCEPTEX           AcceptEx                = nullptr;
+
     //////////////////////// End Attributes ///////////////////////
 
     /************************ Methods **************************/
@@ -141,6 +150,8 @@ private:
     int                 PostRecv            (Socket *sock, Buffer *recvobj);                        // Post an overlapped recv operation on the socket
     int                 PostSend            (Socket *sock, Buffer *sendobj);                        // Post an overlapped send operation on the socket
     void                ClearThreads        ();                                                     // Tells all working threads to shut down and free resources
+    bool                InitAsyncSocketFuncs();                                                     // Initialize function pointer to needed mswsock functions
+    bool                InitAsyncSocketFunc (SOCKET sock, GUID guid, LPVOID func, DWORD size);      // Initialize function pointer to one mswsock function
 
 public:
                         SocketClient        ();

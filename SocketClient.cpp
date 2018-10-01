@@ -1,13 +1,10 @@
-#include <utility>
-
 #include "SocketClient.h"
 
 #ifndef DEBUG
 #define _cprintf(...) if(false);
 #endif
 
-//TODO reusable socket with another list
-//TODO ConnectEx instead of WSAConnect
+//TODO reusable socket with another list and Disconnectex
 //TODO manage incomplete WSASend
 // Post another WSASend() request.
 // Since WSASend() is not guaranteed to send all of the bytes requested,
@@ -16,6 +13,7 @@
 //if you DO have other WSASend calls pending then you should probably abort the connection as you may have garbled your data stream by sending part of the buffer from this WSASend call and then all (or part) of a subsequent WSASend call.
 //TODO max send to avoid consuming all resources
 //TODO use SIO_IDEAL_SEND_BACKLOG_QUERY and SIO_IDEAL_SEND_BACKLOG_CHANGE
+//TODO manage socket server as well
 
 template<typename T>
 template<typename... Args>
@@ -98,6 +96,7 @@ void SocketClient::SendData(const char *data, size_t len, Socket *socket) {
         sendobj->buflen = currentLen;
 
         if(PostSend(socket, sendobj) == SOCKET_ERROR){
+            socket->closing = true;
             Buffer::Delete(sendobj);
             break;
         }
@@ -107,7 +106,7 @@ void SocketClient::SendData(const char *data, size_t len, Socket *socket) {
 
 int SocketClient::PostRecv(Socket *sock, Buffer *recvobj) {
     WSABUF  wbuf;
-    int     rc;
+    int     rc, err;
     DWORD   flags = 0;
 
     recvobj->operation = Operation::Read;
@@ -125,8 +124,8 @@ int SocketClient::PostRecv(Socket *sock, Buffer *recvobj) {
 
         if (rc == SOCKET_ERROR) {
             rc = NO_ERROR;
-            if (WSAGetLastError() != WSA_IO_PENDING) {
-                _cprintf("PostRecv: WSARecv* failed: %d\n", WSAGetLastError());
+            if ((err = WSAGetLastError()) != WSA_IO_PENDING) {
+                _cprintf("PostRecv: WSARecv* failed: %d\n", err);
                 rc = SOCKET_ERROR;
             }
         }
@@ -159,9 +158,7 @@ int SocketClient::PostSend(Socket *sock, Buffer *sendobj) {
         if (rc == SOCKET_ERROR) {
             rc = NO_ERROR;
             if ((err = WSAGetLastError()) != WSA_IO_PENDING) {
-                if (err == WSAENOBUFS)
-                    DebugBreak();
-                _cprintf("PostSend: WSASend* failed: %d [internal = %d]\n", WSAGetLastError(), sendobj->ol.Internal);
+                _cprintf("PostSend: WSASend* failed: %d [internal = %d]\n", err, sendobj->ol.Internal);
                 rc = SOCKET_ERROR;
             }
         }
@@ -217,6 +214,7 @@ void SocketClient::HandleIo(Socket *sockobj, Buffer *buf, DWORD BytesTransfered)
             buf->buflen = DEFAULT_BUFFER_SIZE;
             if(PostRecv(sockobj, buf) == SOCKET_ERROR) {
                 _cprintf("HandleIo: PostRecv failed!\n");
+                sockobj->closing = true;
                 Buffer::Delete(buf);
             }
         }
@@ -240,6 +238,16 @@ void SocketClient::HandleIo(Socket *sockobj, Buffer *buf, DWORD BytesTransfered)
 //        InterlockedExchangeAdd(&bytesSent, BytesTransfered);
 
         Buffer::Delete(buf);
+    }
+    else if (buf->operation == Operation::Connect || buf->operation == Operation::Accept ) {
+        _cprintf("connected\n");
+        // ----------------------------- trigger first recv
+        buf->operation = Operation::Read;
+        if(PostRecv(sockobj, buf) == SOCKET_ERROR){
+            _cprintf("HandleIo: PostRecv failed!\n");
+            sockobj->closing = true;
+            Buffer::Delete(buf);
+        }
     }
     else {
         _cprintf("op ?");
@@ -279,7 +287,7 @@ DWORD WINAPI SocketClient::IOCPWorkerThread(LPVOID lpParam) {
         buffer = CONTAINING_RECORD(lpOverlapped, Buffer, ol);
         if (rc == FALSE) {
             error = GetLastError();
-            _cprintf("CompletionThread: GetQueuedCompletionStatus failed: %d\n", error);
+            _cprintf("CompletionThread: GetQueuedCompletionStatus failed for operation %d : %d\n", buffer->operation, error);
 
             if(socket != nullptr) {
                 rc = WSAGetOverlappedResult(socket->s, &buffer->ol, &BytesTransfered, FALSE, &Flags);
@@ -361,7 +369,9 @@ SocketClient::SocketClient() : state(State::NOT_INITIALIZED), iocpHandle(INVALID
         threadHandles.push_back(ThreadHandle);
     }
     state = State::THREADS_INITIALIZED;
-
+    if (!InitAsyncSocketFuncs())
+        return;
+    state = State::MSWSOCK_FUNC_INITIALIZED;
     state = State::READY;
 }
 
@@ -409,6 +419,7 @@ void SocketClient::ClearThreads() {
 }
 
 SocketClient::Socket* SocketClient::ListenToNewSocket(const char *address, u_short port) {
+    int err;
     if (state < State::READY)
         return nullptr;
 
@@ -444,11 +455,22 @@ SocketClient::Socket* SocketClient::ListenToNewSocket(const char *address, u_sho
     }
     _cprintf("CreateIoCompletionPort ok\n");
 
-    // ----------------------------- connect socket
-
+    // ----------------------------- bind socket
     SOCKADDR_IN SockAddr;
     ZeroMemory(&SockAddr, sizeof(SOCKADDR_IN));
     SockAddr.sin_family = FAMILY;
+    SockAddr.sin_addr.s_addr = INADDR_ANY;
+    SockAddr.sin_port = 0;
+    if (bind(sock,                        //s : A descriptor identifying an unconnected socket.
+             (SOCKADDR*)(&SockAddr),      //name : A pointer to a sockaddr structure that specifies the address to which to connect. For IPv4, the sockaddr contains AF_INET for the address family, the destination IPv4 address, and the destination port.
+             sizeof(SockAddr)             //namelen : The length, in bytes, of the sockaddr structure pointed to by the name parameter.
+            ) == SOCKET_ERROR){
+        _cprintf("bind failed / error %d\n", WSAGetLastError());
+        Socket::Delete(sockObj);
+        return nullptr;
+    }
+
+    // ----------------------------- connect socket
     SockAddr.sin_addr.s_addr = inet_addr(address);
     if(WSAHtons(sockObj->s, port, &SockAddr.sin_port) == SOCKET_ERROR) { // host-to-network-short: big-endian conversion of a 16 byte value
         //WSANOTINITIALISED, WSAENETDOWN, WSAENOTSOCK, WSAEFAULT
@@ -457,28 +479,56 @@ SocketClient::Socket* SocketClient::ListenToNewSocket(const char *address, u_sho
         return nullptr;
     }
 
-    if (WSAConnect(sock,                         //s : A descriptor identifying an unconnected socket.
-                   (SOCKADDR*)(&SockAddr),       //name : A pointer to a sockaddr structure that specifies the address to which to connect. For IPv4, the sockaddr contains AF_INET for the address family, the destination IPv4 address, and the destination port.
-                   sizeof(SockAddr),             //namelen : The length, in bytes, of the sockaddr structure pointed to by the name parameter.
-                   nullptr,                      //lpCallerData : A pointer to the user data that is to be transferred to the other socket during connection establishment.
-                   nullptr,                      //lpCalleeData : A pointer to the user data that is to be transferred back from the other socket during connection establishment.
-                   nullptr,                      //lpSQOS : A pointer to the FLOWSPEC structures for socket s, one for each direction.
-                   nullptr                       //lpGQOS : Reserved for future use with socket groups. A pointer to the FLOWSPEC structures for the socket group (if applicable).
-                  ) == SOCKET_ERROR) {
-        _cprintf("WSAConnect failed / error %d\n", WSAGetLastError());
-        Socket::Delete(sockObj);
-        return nullptr; // connect error
+    Buffer *connectobj = Buffer::Create(inUseBufferList, Operation::Connect);
+    if (!ConnectEx(sock,                        //s : A descriptor identifying an unconnected socket.
+                   (SOCKADDR*)(&SockAddr),      //name : A pointer to a sockaddr structure that specifies the address to which to connect. For IPv4, the sockaddr contains AF_INET for the address family, the destination IPv4 address, and the destination port.
+                   sizeof(SockAddr),            //namelen : The length, in bytes, of the sockaddr structure pointed to by the name parameter.
+                   nullptr,                     //lpSendBuffer : A pointer to the buffer to be transferred after a connection is established. This parameter is optional.
+                   0,                           //dwSendDataLength : The length, in bytes, of data pointed to by the lpSendBuffer parameter. This parameter is ignored when the lpSendBuffer parameter is NULL.
+                   nullptr,                     //lpdwBytesSent : On successful return, this parameter points to a DWORD value that indicates the number of bytes that were sent after the connection was established. This parameter is ignored when the lpSendBuffer parameter is NULL.
+                   &(connectobj->ol)            //lpOverlapped : An OVERLAPPED structure used to process the request. The lpOverlapped parameter must be specified, and cannot be NULL.
+                  )) {
+        if ((err = WSAGetLastError()) != WSA_IO_PENDING) {
+            _cprintf("ListenToNewSocket: ConnectEx failed: %d\n", err);
+            Socket::Delete(sockObj);
+            return nullptr; // connect error
+        }
     }
-    _cprintf("WSAConnect ok\n");
-
-    // ----------------------------- trigger first recv
-
-    Buffer *recvobj = Buffer::Create(inUseBufferList, Operation::Read);
-    if(PostRecv(sockObj, recvobj) == SOCKET_ERROR){
-        _cprintf("ListenToNewSocket: PostRecv failed!\n");
-        Socket::Delete(sockObj);
-        Buffer::Delete(recvobj);
-        return nullptr;
-    }
+    _cprintf("ConnectEx ok\n");
     return sockObj;
+}
+
+bool SocketClient::InitAsyncSocketFuncs() {
+    //dummy socket to pass to WSAIoctl call
+    SOCKET sock = WSASocket(FAMILY,                      //af : The address family specification
+                            SOCK_STREAM,                 //type : SOCK_STREAM -> A socket type that provides sequenced, reliable, two-way, connection-based byte streams with an OOB data transmission mechanism. This socket type uses the Transmission Control Protocol (TCP) for the Internet address family (AF_INET or AF_INET6).
+                            IPPROTO_TCP,                 //protocol : IPPROTO_TCP -> The Transmission Control Protocol (TCP). This is a possible value when the af parameter is AF_INET or AF_INET6 and the type parameter is SOCK_STREAM.
+                            nullptr,                     //lpProtocolInfo : A pointer to a WSAPROTOCOL_INFO structure that defines the characteristics of the socket to be created.
+                            0,                           //g : An existing socket group ID or an appropriate action to take when creating a new socket and a new socket group. 0 -> No group operation is performed.
+                            0);                          //dwFlags : A set of flags used to specify additional socket attributes.
+    if (sock == INVALID_SOCKET) {
+        _cprintf("WSASocket failed / error %d\n", WSAGetLastError());
+        return false;
+    }
+    return InitAsyncSocketFunc(sock, WSAID_CONNECTEX, &ConnectEx, sizeof(ConnectEx)) &&
+           InitAsyncSocketFunc(sock, WSAID_DISCONNECTEX, &DisconnectEx, sizeof(DisconnectEx));/* &&
+           InitAsyncSocketFunc(sock, WSAID_ACCEPTEX, &AcceptEx, sizeof(AcceptEx)); */
+} //TODO remove either Accept or Connect depending on client/server
+
+bool SocketClient::InitAsyncSocketFunc(SOCKET sock, GUID guid, LPVOID func, DWORD size) {
+    DWORD   dwBytes;
+    if (WSAIoctl(sock,                                   //s : A descriptor identifying a socket.
+                 SIO_GET_EXTENSION_FUNCTION_POINTER,     //dwIoControlCode : The control code of operation to perform.
+                 &guid,                                  //lpvInBuffer : A pointer to the input buffer.
+                 sizeof(guid),                           //cbInBuffer : The size, in bytes, of the input buffer.
+                 func,                                   //lpvOutBuffer : A pointer to the output buffer.
+                 size,                                   //cbOutBuffer : The size, in bytes, of the output buffer.
+                 &dwBytes,                               //lpcbBytesReturned : A pointer to actual number of bytes of output.
+                 nullptr,                                //lpOverlapped : A pointer to a WSAOVERLAPPED structure (ignored for non-overlapped sockets).
+                 nullptr                                 //lpCompletionRoutine : A pointer to the completion routine called when the operation has been completed (ignored for non-overlapped sockets).
+                ) != 0) {
+        _cprintf("WSAIoctl failed / error %d\n", WSAGetLastError());
+        return false;
+    }
+    return true;
 }
