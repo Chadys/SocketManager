@@ -34,9 +34,9 @@ public:
     static T*       Create      (CriticalList<T> &l, Args&&... args) {      // Factory function to return pointer to newly created element inside critList
         EnterCriticalSection(&l.critSec);
         //{
-        l.list.emplace_back(l, args...);
-        T &newElt = l.list.back();
-        newElt.it = --l.list.end();
+            l.list.emplace_back(l, args...);
+            T &newElt = l.list.back();
+            newElt.it = --l.list.end();
         //}
         LeaveCriticalSection(&l.critSec);
         return &newElt;
@@ -76,6 +76,7 @@ class Socket : public ListElt<Socket> {     // Contains all needed information a
     friend class SocketClient;
 
 public:
+    inline bool IsDisconnected(){return state == SocketState::BOUND;}//TODO remove
     Socket(CriticalList<Socket> &l, SocketClient *c, SOCKET s_, int af_)  : ListElt(l),
                                                                             s(s_), af(af_), state(SocketState::INIT),
                                                                             OutstandingRecv(0), OutstandingSend(0),
@@ -92,6 +93,7 @@ private:
         INIT,
         ASSOCIATED,
         BOUND,
+        CONNECT_FAILURE,
         CONNECTED,
         CLOSING,
         FAILURE
@@ -101,11 +103,12 @@ private:
     SocketState                 state;                  //state the socket is in
     int                         af;                     // Address family of socket
     volatile LONG               OutstandingRecv,        // Number of outstanding overlapped ops on
-            OutstandingSend;
+                                OutstandingSend;
     CRITICAL_SECTION            SockCritSec;            // Protect access to this structure
     SocketClient*               client;                 // Pointer to containing class
 
-    void            Disconnect  ();                                       // Disconnect socket so it can be used again
+    void            Disconnect  ();                     // Disconnect socket so it can be used again
+    void            Close       ();                     // Permanently close connexion
 
 };
 ////////////// Socket ////////////

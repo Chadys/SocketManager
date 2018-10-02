@@ -39,7 +39,7 @@ private:
 
     CriticalList<Buffer>        inUseBufferList;            // All buffers currently used in an overlapped operation
     CriticalList<Socket>        inUseSocketList;            // All sockets this instance is currently connected to
-    CriticalList<Socket*>       reusableSocketList;         // All sockets previously disconnected that can be recycled
+    CriticalList<Socket*>       reusableSocketList;         // All sockets previously disconnected that can be recycled //TODO use a queue instead
 
 //    volatile LONG               bytesRead               = 0,
 //                                bytesSent               = 0;
@@ -68,7 +68,7 @@ private:
 public:
                         SocketClient        ();
                         ~SocketClient       ();
-    Socket*             CreateSocket        (SOCKET sock);                                          // Try to recycle a disconnected socket, or create a new one
+    Socket*             ReuseSocket         ();                                                     // Try to recycle a disconnected socket, or create a new one
     Socket*             ListenToNewSocket   (const char *address, u_short port);                    // Start listening to new read/write event on this socket
     inline bool         isReady             () const                                                { return state == State::READY; };
     void                SendData            (const char *data, size_t len, Socket *socket);         // Send a given buffer to the given socket

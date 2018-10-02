@@ -1,10 +1,13 @@
 #include "SocketClient.h"
+#include "SocketHelperClasses.h"
 
-//TODO reusable socket with another list and Disconnectex
 //TODO max send to avoid consuming all resources
 //TODO use SIO_IDEAL_SEND_BACKLOG_QUERY and SIO_IDEAL_SEND_BACKLOG_CHANGE
 //TODO manage socket server as well
 //TODO remove all uneeded lines
+//TODO smallr functions
+//TODO set default options (see chromium)
+//all SO_REUSE_UNICASTPORT
 
 LPFN_CONNECTEX          SocketClient::ConnectEx         = nullptr;
 LPFN_DISCONNECTEX       SocketClient::DisconnectEx      = nullptr;
@@ -14,6 +17,13 @@ int SocketClient::ReceiveData(const char *data, size_t len, Socket *socket) {
     _cprintf("receive bytes : %.*s\n", len, data);
     if(len == 5 && strncmp(data, "ping\n", 5) == 0)
         SendData("pong", 4, socket);
+    else if(len == 5 && strncmp(data, "quit\n", 5) == 0) {
+        EnterCriticalSection(&socket->SockCritSec);
+        {
+            socket->state = Socket::SocketState::CLOSING;
+        }
+        LeaveCriticalSection(&socket->SockCritSec);
+    }
     return 1;
 }
 
@@ -111,18 +121,31 @@ int SocketClient::PostSend(Socket *sock, Buffer *sendobj) {
 void SocketClient::HandleError(Socket *sockobj, Buffer *buf, DWORD error) {
     bool    cleanupSocket   = false;
 
-    _cprintf("OP = %d; Error = %d\n", buf->operation, error);
+    _cprintf("Handle error OP = %d; Error = %d\n", buf->operation, error);
 
     EnterCriticalSection(&sockobj->SockCritSec);
     {
-        if (buf->operation == Buffer::Operation::Read) {
-            sockobj->OutstandingRecv--;
-        }
-        else if (buf->operation == Buffer::Operation::Write) {
-            sockobj->OutstandingSend--;
+        switch (buf->operation){
+            case Buffer::Operation::Connect :{
+                sockobj->state = Socket::SocketState::CONNECT_FAILURE;
+                break;
+            }
+            case Buffer::Operation::Read :{
+                sockobj->state = Socket::SocketState::FAILURE;
+                sockobj->OutstandingRecv--;
+                break;
+            }
+            case Buffer::Operation::Write :{
+                sockobj->state = Socket::SocketState::FAILURE;
+                sockobj->OutstandingSend--;
+                break;
+            }
+            default :{
+                sockobj->state = Socket::SocketState::FAILURE;
+            }
         }
         if (sockobj->OutstandingRecv == 0 && sockobj->OutstandingSend == 0) {
-            _cprintf("Freeing socket obj in GetOverlappedResult\n");
+            _cprintf("Freeing socket obj in HandleError\n");
             cleanupSocket = true;
         }
     }
@@ -202,10 +225,22 @@ void SocketClient::HandleIo(Socket *sockobj, Buffer *buf, DWORD BytesTransfered)
         }
         LeaveCriticalSection(&sockobj->SockCritSec);
         _cprintf("connected\n");
+        int err = NO_ERROR;
+        int option = buf->operation == Buffer::Operation::Connect
+                   ? SO_UPDATE_CONNECT_CONTEXT              //This option is used with the ConnectEx, WSAConnectByList, and WSAConnectByName functions. This option updates the properties of the socket after the connection is established. This option should be set if the getpeername, getsockname, getsockopt, setsockopt, or shutdown functions are to be used on the connected socket.
+                   : SO_UPDATE_ACCEPT_CONTEXT;              //This option is used with the AcceptEx function. This option updates the properties of the socket which are inherited from the listening socket. This option should be set if the getpeername, getsockname, getsockopt, or setsockopt functions are to be used on the accepted socket.
+        // ----------------------------- set needed options
+        if(setsockopt(sockobj->s, SOL_SOCKET, option, nullptr, 0 ) == SOCKET_ERROR){ //shouldn't ever happens
+            err = WSAGetLastError();
+            _cprintf("HandleIo: setsockopt failed : %d\n", err);
+        }
         // ----------------------------- trigger first recv
         buf->operation = Buffer::Operation::Read;
         if(PostRecv(sockobj, buf) == SOCKET_ERROR){
+            err = SOCKET_ERROR;
             _cprintf("HandleIo: PostRecv failed!\n");
+        }
+        if (err != NO_ERROR){
             EnterCriticalSection(&sockobj->SockCritSec);
             {
                 sockobj->state = Socket::SocketState::FAILURE;
@@ -222,7 +257,7 @@ void SocketClient::HandleIo(Socket *sockobj, Buffer *buf, DWORD BytesTransfered)
         LeaveCriticalSection(&sockobj->SockCritSec);
         EnterCriticalSection(&reusableSocketList.critSec);
         {
-            reusableSocketList.list.push_back(sockobj);
+            reusableSocketList.list.push_back(sockobj); //TODO test if queue is already too big
         }
         LeaveCriticalSection(&reusableSocketList.critSec);
         _cprintf("disconnected\n");
@@ -407,20 +442,25 @@ Socket* SocketClient::ListenToNewSocket(const char *address, u_short port) {
     // ----------------------------- create socket
 
     SOCKET sock;
-    if ((sock = WSASocket(FAMILY,                      //af : The address family specification
-                          SOCK_STREAM,                 //type : SOCK_STREAM -> A socket type that provides sequenced, reliable, two-way, connection-based byte streams with an OOB data transmission mechanism. This socket type uses the Transmission Control Protocol (TCP) for the Internet address family (AF_INET or AF_INET6).
-                          IPPROTO_TCP,                 //protocol : IPPROTO_TCP -> The Transmission Control Protocol (TCP). This is a possible value when the af parameter is AF_INET or AF_INET6 and the type parameter is SOCK_STREAM.
-                          nullptr,                     //lpProtocolInfo : A pointer to a WSAPROTOCOL_INFO structure that defines the characteristics of the socket to be created.
-                          0,                           //g : An existing socket group ID or an appropriate action to take when creating a new socket and a new socket group. 0 -> No group operation is performed.
-                          WSA_FLAG_OVERLAPPED          //dwFlags : A set of flags used to specify additional socket attributes. WSA_FLAG_OVERLAPPED -> Create a socket that supports overlapped I/O operations.
-                         )) == INVALID_SOCKET) {
-        _cprintf("WSASocket failed / error %d\n", WSAGetLastError());
-        return nullptr;
-    }
-    else
-        _cprintf("WSASocket ok\n");
+    Socket *sockObj = ReuseSocket();
 
-    Socket *sockObj = CreateSocket(sock);
+    if(sockObj == nullptr) {
+        if ((sock = WSASocket(FAMILY,                      //af : The address family specification
+                              SOCK_STREAM,                 //type : SOCK_STREAM -> A socket type that provides sequenced, reliable, two-way, connection-based byte streams with an OOB data transmission mechanism. This socket type uses the Transmission Control Protocol (TCP) for the Internet address family (AF_INET or AF_INET6).
+                              IPPROTO_TCP,                 //protocol : IPPROTO_TCP -> The Transmission Control Protocol (TCP). This is a possible value when the af parameter is AF_INET or AF_INET6 and the type parameter is SOCK_STREAM.
+                              nullptr,                     //lpProtocolInfo : A pointer to a WSAPROTOCOL_INFO structure that defines the characteristics of the socket to be created.
+                              0,                           //g : An existing socket group ID or an appropriate action to take when creating a new socket and a new socket group. 0 -> No group operation is performed.
+                              WSA_FLAG_OVERLAPPED          //dwFlags : A set of flags used to specify additional socket attributes. WSA_FLAG_OVERLAPPED -> Create a socket that supports overlapped I/O operations.
+        )) == INVALID_SOCKET) {
+            _cprintf("WSASocket failed / error %d\n", WSAGetLastError());
+            return nullptr;
+        }
+        _cprintf("WSASocket ok\n");
+        const int fam = FAMILY;
+        sockObj = Socket::Create(inUseSocketList, this, sock, fam); //can't use FAMILY directly else undefined reference to `SocketClient::FAMILY' STRANGEST ERROR EVER, compiler bug ?
+    } else {
+        sock = sockObj->s;
+    }
 
     SOCKADDR_IN SockAddr;
     ZeroMemory(&SockAddr, sizeof(SOCKADDR_IN));
@@ -455,6 +495,7 @@ Socket* SocketClient::ListenToNewSocket(const char *address, u_short port) {
         _cprintf("bind ok\n");
         sockObj->state = Socket::SocketState::BOUND;
     }
+
     // ----------------------------- connect socket
     SockAddr.sin_addr.s_addr = inet_addr(address);
     if(WSAHtons(sockObj->s, port, &SockAddr.sin_port) == SOCKET_ERROR) { // host-to-network-short: big-endian conversion of a 16 byte value
@@ -518,18 +559,16 @@ bool SocketClient::InitAsyncSocketFunc(SOCKET sock, GUID guid, LPVOID func, DWOR
     return true;
 }
 
-Socket *SocketClient::CreateSocket(SOCKET sock) {
+Socket *SocketClient::ReuseSocket() {
     Socket *sockObj = nullptr;
     EnterCriticalSection(&reusableSocketList.critSec);
     {
-        if (reusableSocketList.list.size() >= MAX_UNUSED_SOCKET){
+        if (!reusableSocketList.list.empty()){
             sockObj = reusableSocketList.list.front();
+            _cprintf("Recycling socket\n");
             reusableSocketList.list.pop_front();
         }
     }
     LeaveCriticalSection(&reusableSocketList.critSec);
-    if (sockObj != nullptr)
-        return sockObj;
-    const int fam = FAMILY;
-    return Socket::Create(inUseSocketList, this, sock, fam); //can't use FAMILY directly else undefined reference to `SocketClient::FAMILY' STRANGEST ERROR EVER, compiler bug ?
+    return sockObj;
 }
