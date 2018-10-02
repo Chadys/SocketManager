@@ -1,78 +1,14 @@
 #include "SocketClient.h"
 
-#ifndef DEBUG
-#define _cprintf(...) if(false);
-#endif
-
 //TODO reusable socket with another list and Disconnectex
 //TODO max send to avoid consuming all resources
 //TODO use SIO_IDEAL_SEND_BACKLOG_QUERY and SIO_IDEAL_SEND_BACKLOG_CHANGE
 //TODO manage socket server as well
 //TODO remove all uneeded lines
 
-template<typename T>
-template<typename... Args>
-T *SocketClient::ListElt<T>::Create(CriticalList<T> &l, Args &&... args) {
-    EnterCriticalSection(&l.critSec);
-    //{
-        l.list.emplace_back(l, args...);
-        T &newElt = l.list.back();
-        newElt.it = --l.list.end();
-    //}
-    LeaveCriticalSection(&l.critSec);
-    return &newElt;
-}
-
-template<typename T>
-void SocketClient::ListElt<T>::Delete(T *obj) {
-    auto &critList = obj->critList;
-    EnterCriticalSection(&critList.critSec);
-    {
-        obj->critList.list.erase(obj->it);
-    }
-    LeaveCriticalSection(&critList.critSec);
-}
-
-template<typename T>
-void SocketClient::ListElt<T>::ClearList(SocketClient::CriticalList<T> &critList) {
-    while (true){
-        EnterCriticalSection(&critList.critSec);
-        //{
-        if (critList.list.empty()){
-            LeaveCriticalSection(&critList.critSec);
-            break;
-        }
-        T &elt = critList.list.front();
-        //}
-        LeaveCriticalSection(&critList.critSec);
-        T::Delete(&elt);
-    }
-}
-
-void SocketClient::Socket::Delete(Socket *obj) {
-    EnterCriticalSection(&obj->SockCritSec);
-    //TODO change depending on socket state
-    // Close the socket if it hasn't already been closed
-    if (obj->s != INVALID_SOCKET) {
-        _cprintf("Socket::Delete: closing socket\n");
-        if (shutdown(obj->s, SD_BOTH) != NO_ERROR) {
-            int err = WSAGetLastError();
-            _cprintf("Socket::Delete: closesocket failed / error %d\n", err);
-            if (err == WSAEINPROGRESS)
-                return;
-        }
-        if (closesocket(obj->s) != NO_ERROR) {
-            int err = WSAGetLastError();
-            _cprintf("Socket::Delete: closesocket failed / error %d\n", err);
-            if (err == WSAEINPROGRESS)
-                return;
-        }
-        obj->s = INVALID_SOCKET;
-    }
-    LeaveCriticalSection(&obj->SockCritSec);
-
-    ListElt<Socket>::Delete(obj);
-}
+LPFN_CONNECTEX          SocketClient::ConnectEx         = nullptr;
+LPFN_DISCONNECTEX       SocketClient::DisconnectEx      = nullptr;
+LPFN_ACCEPTEX           SocketClient::AcceptEx          = nullptr;
 
 int SocketClient::ReceiveData(const char *data, size_t len, Socket *socket) {
     _cprintf("receive bytes : %.*s\n", len, data);
@@ -87,9 +23,9 @@ void SocketClient::SendData(const char *data, size_t len, Socket *socket) {
     _cprintf("send %s\n", data);
 
     while(len > 0){
-        Buffer *sendobj = Buffer::Create(inUseBufferList, Operation::Write);
+        Buffer *sendobj = Buffer::Create(inUseBufferList, Buffer::Operation::Write);
 
-        size_t currentLen = len > DEFAULT_BUFFER_SIZE ? DEFAULT_BUFFER_SIZE : len;
+        size_t currentLen = len > Buffer::DEFAULT_BUFFER_SIZE ? Buffer::DEFAULT_BUFFER_SIZE : len;
         strncpy(sendobj->buf, data, currentLen);
         sendobj->buflen = currentLen;
 
@@ -111,7 +47,7 @@ int SocketClient::PostRecv(Socket *sock, Buffer *recvobj) {
     int     rc, err;
     DWORD   flags = 0;
 
-    recvobj->operation = Operation::Read;
+    recvobj->operation = Buffer::Operation::Read;
     wbuf.buf = recvobj->buf;
     wbuf.len = recvobj->buflen;
     EnterCriticalSection(&(sock->SockCritSec));
@@ -144,7 +80,7 @@ int SocketClient::PostSend(Socket *sock, Buffer *sendobj) {
     WSABUF  wbuf;
     int     rc, err;
 
-    sendobj->operation = Operation::Write;
+    sendobj->operation = Buffer::Operation::Write;
     wbuf.buf = sendobj->buf;
     wbuf.len = sendobj->buflen;
     EnterCriticalSection(&(sock->SockCritSec));
@@ -179,10 +115,10 @@ void SocketClient::HandleError(Socket *sockobj, Buffer *buf, DWORD error) {
 
     EnterCriticalSection(&sockobj->SockCritSec);
     {
-        if (buf->operation == Operation::Read) {
+        if (buf->operation == Buffer::Operation::Read) {
             sockobj->OutstandingRecv--;
         }
-        else if (buf->operation == Operation::Write) {
+        else if (buf->operation == Buffer::Operation::Write) {
             sockobj->OutstandingSend--;
         }
         if (sockobj->OutstandingRecv == 0 && sockobj->OutstandingSend == 0) {
@@ -200,7 +136,7 @@ void SocketClient::HandleError(Socket *sockobj, Buffer *buf, DWORD error) {
 void SocketClient::HandleIo(Socket *sockobj, Buffer *buf, DWORD BytesTransfered) {
     bool    cleanupSocket   = false;
 
-    if (buf->operation == Operation::Read) {
+    if (buf->operation == Buffer::Operation::Read) {
         EnterCriticalSection(&sockobj->SockCritSec);
         {
             sockobj->OutstandingRecv--;
@@ -213,7 +149,7 @@ void SocketClient::HandleIo(Socket *sockobj, Buffer *buf, DWORD BytesTransfered)
 //            InterlockedExchangeAdd(&bytesRead, BytesTransfered);
             buf->buflen = BytesTransfered;
             ReceiveData(buf->buf, buf->buflen, sockobj);
-            buf->buflen = DEFAULT_BUFFER_SIZE;
+            buf->buflen = Buffer::DEFAULT_BUFFER_SIZE;
             if (sockobj->state != Socket::SocketState::CONNECTED)
                 Buffer::Delete(buf);
             else if(PostRecv(sockobj, buf) == SOCKET_ERROR) {
@@ -238,7 +174,7 @@ void SocketClient::HandleIo(Socket *sockobj, Buffer *buf, DWORD BytesTransfered)
             Buffer::Delete(buf);
         }
     }
-    else if (buf->operation == Operation::Write) {
+    else if (buf->operation == Buffer::Operation::Write) {
         _cprintf("write\n");
 
         // Update the counters
@@ -259,7 +195,7 @@ void SocketClient::HandleIo(Socket *sockobj, Buffer *buf, DWORD BytesTransfered)
 
         Buffer::Delete(buf);
     }
-    else if (buf->operation == Operation::Connect || buf->operation == Operation::Accept ) {
+    else if (buf->operation == Buffer::Operation::Connect || buf->operation == Buffer::Operation::Accept ) {
         EnterCriticalSection(&sockobj->SockCritSec);
         {
             sockobj->state = Socket::SocketState::CONNECTED;
@@ -267,7 +203,7 @@ void SocketClient::HandleIo(Socket *sockobj, Buffer *buf, DWORD BytesTransfered)
         LeaveCriticalSection(&sockobj->SockCritSec);
         _cprintf("connected\n");
         // ----------------------------- trigger first recv
-        buf->operation = Operation::Read;
+        buf->operation = Buffer::Operation::Read;
         if(PostRecv(sockobj, buf) == SOCKET_ERROR){
             _cprintf("HandleIo: PostRecv failed!\n");
             EnterCriticalSection(&sockobj->SockCritSec);
@@ -277,6 +213,20 @@ void SocketClient::HandleIo(Socket *sockobj, Buffer *buf, DWORD BytesTransfered)
             LeaveCriticalSection(&sockobj->SockCritSec);
             Buffer::Delete(buf);
         }
+    }
+    else if (buf->operation == Buffer::Operation::Disconnect ) {
+        EnterCriticalSection(&sockobj->SockCritSec);
+        {
+            sockobj->state = Socket::SocketState::BOUND;
+        }
+        LeaveCriticalSection(&sockobj->SockCritSec);
+        EnterCriticalSection(&reusableSocketList.critSec);
+        {
+            reusableSocketList.list.push_back(sockobj);
+        }
+        LeaveCriticalSection(&reusableSocketList.critSec);
+        _cprintf("disconnected\n");
+        Buffer::Delete(buf);
     }
     else {
         _cprintf("op ?");
@@ -325,7 +275,7 @@ DWORD WINAPI SocketClient::IOCPWorkerThread(LPVOID lpParam) {
                 }
             }
         }
-        if (buffer->operation == Operation::End)
+        if (buffer->operation == Buffer::Operation::End)
             break;
         if (error != NO_ERROR)
             socket->client->HandleError(socket, buffer, error);
@@ -375,6 +325,7 @@ SocketClient::SocketClient() : state(State::NOT_INITIALIZED), iocpHandle(INVALID
 
     InitializeCriticalSection(&inUseBufferList.critSec);
     InitializeCriticalSection(&inUseSocketList.critSec);
+    InitializeCriticalSection(&reusableSocketList.critSec);
     state = State::CRIT_SEC_INITIALIZED;
 
     // ----------------------------- create worker threads
@@ -398,7 +349,7 @@ SocketClient::SocketClient() : state(State::NOT_INITIALIZED), iocpHandle(INVALID
         threadHandles.push_back(ThreadHandle);
     }
     state = State::THREADS_INITIALIZED;
-    if (!InitAsyncSocketFuncs())
+    if (DisconnectEx == nullptr && !InitAsyncSocketFuncs())
         return;
     state = State::MSWSOCK_FUNC_INITIALIZED;
     state = State::READY;
@@ -413,6 +364,7 @@ SocketClient::~SocketClient() {
     if(state >= State::CRIT_SEC_INITIALIZED){
         DeleteCriticalSection(&inUseBufferList.critSec);
         DeleteCriticalSection(&inUseSocketList.critSec);
+        DeleteCriticalSection(&reusableSocketList.critSec);
     }
     if(state >= State::IOCP_INITIALIZED){
         CloseHandle(iocpHandle);
@@ -428,7 +380,7 @@ SocketClient::~SocketClient() {
 void SocketClient::ClearThreads() {
     if(!threadHandles.empty()){
         for (int i = 0 ; i < threadHandles.size() ; i++){
-            Buffer *endobj = Buffer::Create(inUseBufferList, Operation::End);
+            Buffer *endobj = Buffer::Create(inUseBufferList, Buffer::Operation::End);
 
             // Unblock threads from GetQueuedCompletionStatus call and signal application close
             PostQueuedCompletionStatus(iocpHandle,              //CompletionPort : A handle to an I/O completion port to which the I/O completion packet is to be posted.
@@ -447,7 +399,7 @@ void SocketClient::ClearThreads() {
     }
 }
 
-SocketClient::Socket* SocketClient::ListenToNewSocket(const char *address, u_short port) {
+Socket* SocketClient::ListenToNewSocket(const char *address, u_short port) {
     int err;
     if (state < State::READY)
         return nullptr;
@@ -468,40 +420,41 @@ SocketClient::Socket* SocketClient::ListenToNewSocket(const char *address, u_sho
     else
         _cprintf("WSASocket ok\n");
 
-    const int fam = FAMILY;
-    Socket *sockObj = Socket::Create(inUseSocketList, this, sock, fam); //can't use FAMILY directly else undefined reference to `SocketClient::FAMILY' STRANGEST ERROR EVER, compiler bug ?
+    Socket *sockObj = CreateSocket(sock);
 
-    // ----------------------------- associate socket to IOCP
-    _cprintf("GetSocketObj ok\n");
-    HANDLE hrc = CreateIoCompletionPort((HANDLE)sockObj->s,          //FileHandle[in] : An open file handle. The handle must be to an object that supports overlapped I/O.
-                                        iocpHandle,                  //ExistingCompletionPort[in, optional] : A handle to an existing I/O completion, the function associates it with the handle specified by the FileHandle parameter.
-                                        (ULONG_PTR)sockObj,          //CompletionKey[in] : The per-handle user-defined completion key that is included in every I/O completion packet for the specified file handle.
-                                        0);                          //NumberOfConcurrentThreads[in] : This parameter is ignored if the ExistingCompletionPort parameter is not NULL.
-    if (hrc == nullptr) {
-        _cprintf("CreateIoCompletionPort failed / error %d\n", GetLastError());
-        Socket::Delete(sockObj);
-        return nullptr;
-    }
-    sockObj->state = Socket::SocketState::ASSOCIATED;
-    _cprintf("CreateIoCompletionPort ok\n");
-
-    // ----------------------------- bind socket
     SOCKADDR_IN SockAddr;
     ZeroMemory(&SockAddr, sizeof(SOCKADDR_IN));
     SockAddr.sin_family = FAMILY;
     SockAddr.sin_addr.s_addr = INADDR_ANY;
     SockAddr.sin_port = 0;
-    if (bind(sock,                        //s : A descriptor identifying an unconnected socket.
-             (SOCKADDR*)(&SockAddr),      //name : A pointer to a sockaddr structure that specifies the address to which to connect. For IPv4, the sockaddr contains AF_INET for the address family, the destination IPv4 address, and the destination port.
-             sizeof(SockAddr)             //namelen : The length, in bytes, of the sockaddr structure pointed to by the name parameter.
-            ) == SOCKET_ERROR){
-        _cprintf("bind failed / error %d\n", WSAGetLastError());
-        Socket::Delete(sockObj);
-        return nullptr;
-    }
-    _cprintf("bind ok\n");
-    sockObj->state = Socket::SocketState::BOUND;
 
+    if (sockObj->state < Socket::SocketState::BOUND) { //if not recycled socket
+        // ----------------------------- associate socket to IOCP
+        _cprintf("GetSocketObj ok\n");
+        HANDLE hrc = CreateIoCompletionPort((HANDLE)sockObj->s,          //FileHandle[in] : An open file handle. The handle must be to an object that supports overlapped I/O.
+                                            iocpHandle,                  //ExistingCompletionPort[in, optional] : A handle to an existing I/O completion, the function associates it with the handle specified by the FileHandle parameter.
+                                            (ULONG_PTR)sockObj,          //CompletionKey[in] : The per-handle user-defined completion key that is included in every I/O completion packet for the specified file handle.
+                                            0);                          //NumberOfConcurrentThreads[in] : This parameter is ignored if the ExistingCompletionPort parameter is not NULL.
+        if (hrc == nullptr) {
+            _cprintf("CreateIoCompletionPort failed / error %d\n", GetLastError());
+            Socket::Delete(sockObj);
+            return nullptr;
+        }
+        sockObj->state = Socket::SocketState::ASSOCIATED;
+        _cprintf("CreateIoCompletionPort ok\n");
+
+        // ----------------------------- bind socket
+        if (bind(sock,                        //s : A descriptor identifying an unconnected socket.
+                 (SOCKADDR*)(&SockAddr),      //name : A pointer to a sockaddr structure that specifies the address to which to connect. For IPv4, the sockaddr contains AF_INET for the address family, the destination IPv4 address, and the destination port.
+                 sizeof(SockAddr)             //namelen : The length, in bytes, of the sockaddr structure pointed to by the name parameter.
+                ) == SOCKET_ERROR){
+            _cprintf("bind failed / error %d\n", WSAGetLastError());
+            Socket::Delete(sockObj);
+            return nullptr;
+        }
+        _cprintf("bind ok\n");
+        sockObj->state = Socket::SocketState::BOUND;
+    }
     // ----------------------------- connect socket
     SockAddr.sin_addr.s_addr = inet_addr(address);
     if(WSAHtons(sockObj->s, port, &SockAddr.sin_port) == SOCKET_ERROR) { // host-to-network-short: big-endian conversion of a 16 byte value
@@ -511,7 +464,7 @@ SocketClient::Socket* SocketClient::ListenToNewSocket(const char *address, u_sho
         return nullptr;
     }
 
-    Buffer *connectobj = Buffer::Create(inUseBufferList, Operation::Connect);
+    Buffer *connectobj = Buffer::Create(inUseBufferList, Buffer::Operation::Connect);
     if (!ConnectEx(sock,                        //s : A descriptor identifying an unconnected socket.
                    (SOCKADDR*)(&SockAddr),      //name : A pointer to a sockaddr structure that specifies the address to which to connect. For IPv4, the sockaddr contains AF_INET for the address family, the destination IPv4 address, and the destination port.
                    sizeof(SockAddr),            //namelen : The length, in bytes, of the sockaddr structure pointed to by the name parameter.
@@ -563,4 +516,20 @@ bool SocketClient::InitAsyncSocketFunc(SOCKET sock, GUID guid, LPVOID func, DWOR
         return false;
     }
     return true;
+}
+
+Socket *SocketClient::CreateSocket(SOCKET sock) {
+    Socket *sockObj = nullptr;
+    EnterCriticalSection(&reusableSocketList.critSec);
+    {
+        if (reusableSocketList.list.size() >= MAX_UNUSED_SOCKET){
+            sockObj = reusableSocketList.list.front();
+            reusableSocketList.list.pop_front();
+        }
+    }
+    LeaveCriticalSection(&reusableSocketList.critSec);
+    if (sockObj != nullptr)
+        return sockObj;
+    const int fam = FAMILY;
+    return Socket::Create(inUseSocketList, this, sock, fam); //can't use FAMILY directly else undefined reference to `SocketClient::FAMILY' STRANGEST ERROR EVER, compiler bug ?
 }
