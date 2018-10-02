@@ -5,13 +5,20 @@
 //TODO use SIO_IDEAL_SEND_BACKLOG_QUERY and SIO_IDEAL_SEND_BACKLOG_CHANGE
 //TODO manage socket server as well
 //TODO remove all uneeded lines
-//TODO smallr functions
+//TODO smaller functions
 //TODO set default options (see chromium)
 //all SO_REUSE_UNICASTPORT
+//TODO check python windows implementation
+//TODO gard against socket pointer problems
+//TODO if connect of previously disconnected socket fail, double wait_time
 
-LPFN_CONNECTEX          SocketClient::ConnectEx         = nullptr;
-LPFN_DISCONNECTEX       SocketClient::DisconnectEx      = nullptr;
-LPFN_ACCEPTEX           SocketClient::AcceptEx          = nullptr;
+LPFN_CONNECTEX          SocketClient::ConnectEx             = nullptr;
+LPFN_DISCONNECTEX       SocketClient::DisconnectEx          = nullptr;
+LPFN_ACCEPTEX           SocketClient::AcceptEx              = nullptr;
+const TCHAR *           SocketClient::TIME_WAIT_REG_KEY     = TEXT("SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters");
+const TCHAR *           SocketClient::TIME_WAIT_REG_VALUE   = TEXT("TcpTimedWaitDelay");
+DWORD                   SocketClient::TimeWaitValue         = 0;
+
 
 int SocketClient::ReceiveData(const char *data, size_t len, Socket *socket) {
     _cprintf("receive bytes : %.*s\n", len, data);
@@ -253,6 +260,7 @@ void SocketClient::HandleIo(Socket *sockobj, Buffer *buf, DWORD BytesTransfered)
         EnterCriticalSection(&sockobj->SockCritSec);
         {
             sockobj->state = Socket::SocketState::BOUND;
+            sockobj->timeWaitStartTime = GetTickCount();
         }
         LeaveCriticalSection(&sockobj->SockCritSec);
         EnterCriticalSection(&reusableSocketList.critSec);
@@ -387,6 +395,9 @@ SocketClient::SocketClient() : state(State::NOT_INITIALIZED), iocpHandle(INVALID
     if (DisconnectEx == nullptr && !InitAsyncSocketFuncs())
         return;
     state = State::MSWSOCK_FUNC_INITIALIZED;
+    if (TimeWaitValue == 0)
+        InitTimeWaitValue();
+    state = State::TIME_WAIT_VALUE_SELECTED;
     state = State::READY;
 }
 
@@ -559,14 +570,43 @@ bool SocketClient::InitAsyncSocketFunc(SOCKET sock, GUID guid, LPVOID func, DWOR
     return true;
 }
 
+void SocketClient::InitTimeWaitValue() {
+    DWORD   timeWaitValueFromRegistry;
+    int     err = Misc::GetRegistryValue(TIME_WAIT_REG_KEY, TIME_WAIT_REG_VALUE, timeWaitValueFromRegistry);
+
+    switch (err) {
+        case NO_ERROR :{
+            if (timeWaitValueFromRegistry < MIN_TIME_WAIT_VALUE)
+                TimeWaitValue = MIN_TIME_WAIT_VALUE;
+            else if (timeWaitValueFromRegistry > MAX_TIME_WAIT_VALUE)
+                TimeWaitValue = MAX_TIME_WAIT_VALUE;
+            else
+                TimeWaitValue = timeWaitValueFromRegistry;
+            break;
+        }
+        case ERROR_FILE_NOT_FOUND :{ // No value present in registry, use default
+            TimeWaitValue = DEFAULT_TIME_WAIT_VALUE;
+            break;
+        }
+        default: // Something went wrong, default to max value
+            TimeWaitValue = MAX_TIME_WAIT_VALUE;
+    }
+}
+
 Socket *SocketClient::ReuseSocket() {
     Socket *sockObj = nullptr;
     EnterCriticalSection(&reusableSocketList.critSec);
     {
         if (!reusableSocketList.list.empty()){
             sockObj = reusableSocketList.list.front();
-            _cprintf("Recycling socket\n");
-            reusableSocketList.list.pop_front();
+            DWORD currentTime = GetTickCount();
+            if(currentTime - sockObj->timeWaitStartTime > TimeWaitValue) {
+                _cprintf("Recycling socket\n");
+                sockObj->timeWaitStartTime = 0;
+                reusableSocketList.list.pop_front();
+            } else {
+                sockObj = nullptr;
+            }
         }
     }
     LeaveCriticalSection(&reusableSocketList.critSec);

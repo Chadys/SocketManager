@@ -3,6 +3,7 @@
 
 #include "SocketHelperClasses.h"
 #include <vector>
+#include "Misc.h"
 
 #define DEBUG
 #ifndef DEBUG
@@ -15,9 +16,18 @@ class SocketClient {                            // Manage a client connected to 
 private:
     /************************ Attributes **************************/
 
-    static const int        FAMILY                  = AF_INET;      // IPv4 address family.
-    static const int        THREADS_PER_PROC        = 1;
-    static const int        MAX_UNUSED_SOCKET       = 1; //TODO
+    static const int            FAMILY                      = AF_INET;      // IPv4 address family.
+    static const int            THREADS_PER_PROC            = 1;
+    static const int            MAX_UNUSED_SOCKET           = 1; //TODO
+    static const int            DEFAULT_TIME_WAIT_VALUE     = 120000;       // Either 120 or 240sec depending on doc page, but tests confirmed 120 (https://docs.microsoft.com/en-us/biztalk/technical-guides/settings-that-can-be-modified-to-improve-network-performance | https://docs.microsoft.com/en-us/previous-versions/windows/it-pro/windows-2000-server/cc938217(v=technet.10))
+    static const int            MIN_TIME_WAIT_VALUE         = 30000;        // Range goes from 30 to 300sec according to microsoft doc
+    static const int            MAX_TIME_WAIT_VALUE         = 300000;       // Range goes from 30 to 300sec according to microsoft doc
+    static const TCHAR *        TIME_WAIT_REG_KEY;
+    static const TCHAR *        TIME_WAIT_REG_VALUE;
+    static DWORD                TimeWaitValue;
+    static LPFN_CONNECTEX       ConnectEx;
+    static LPFN_DISCONNECTEX    DisconnectEx;
+    static LPFN_ACCEPTEX        AcceptEx;
 
     //////////////////////// End Attributes ///////////////////////
 
@@ -30,6 +40,7 @@ private:
         CRIT_SEC_INITIALIZED,
         THREADS_INITIALIZED,
         MSWSOCK_FUNC_INITIALIZED,
+        TIME_WAIT_VALUE_SELECTED,
         READY
     };
 
@@ -47,10 +58,6 @@ private:
     std::vector<HANDLE>         threadHandles;              // Handles to all threads receiving IOCP events
     HANDLE                      iocpHandle;                 // Handle to IO completion port
 
-    static LPFN_CONNECTEX       ConnectEx;
-    static LPFN_DISCONNECTEX    DisconnectEx;
-    static LPFN_ACCEPTEX        AcceptEx;
-
     //////////////////////// End Attributes ///////////////////////
 
     /************************ Methods **************************/
@@ -64,6 +71,7 @@ private:
     void                ClearThreads        ();                                                     // Tells all working threads to shut down and free resources
     bool                InitAsyncSocketFuncs();                                                     // Initialize function pointer to needed mswsock functions
     bool                InitAsyncSocketFunc (SOCKET sock, GUID guid, LPVOID func, DWORD size);      // Initialize function pointer to one mswsock function
+    void                InitTimeWaitValue   ();                                                     // Initialize TIME_WAIT detected value
 
 public:
                         SocketClient        ();

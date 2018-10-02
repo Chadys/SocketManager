@@ -80,7 +80,7 @@ public:
     Socket(CriticalList<Socket> &l, SocketClient *c, SOCKET s_, int af_)  : ListElt(l),
                                                                             s(s_), af(af_), state(SocketState::INIT),
                                                                             OutstandingRecv(0), OutstandingSend(0),
-                                                                            SockCritSec{}, client(c) {
+                                                                            SockCritSec{}, client(c), timeWaitStartTime(0) {
         InitializeCriticalSection(&SockCritSec);
     }
     ~Socket(){
@@ -106,6 +106,7 @@ private:
                                 OutstandingSend;
     CRITICAL_SECTION            SockCritSec;            // Protect access to this structure
     SocketClient*               client;                 // Pointer to containing class
+    DWORD                       timeWaitStartTime;      // Counter to test if socket has gotten out of TIME_WAIT state after a disconnect
 
     void            Disconnect  ();                     // Disconnect socket so it can be used again
     void            Close       ();                     // Permanently close connexion

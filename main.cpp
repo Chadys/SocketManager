@@ -10,7 +10,7 @@ int main(){
         if((socket = client.ListenToNewSocket(address, port)) != nullptr) {
             for (;;) {
                 if (socket->IsDisconnected()) {
-                    Sleep(300000); // Sleep five minutes
+//                    Sleep(300000); // Sleep five minutes
                     socket = client.ListenToNewSocket(address, port);
                 }
             }
