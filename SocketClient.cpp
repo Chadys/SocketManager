@@ -19,11 +19,11 @@ const TCHAR *           SocketClient::TIME_WAIT_REG_VALUE   = TEXT("TcpTimedWait
 DWORD                   SocketClient::TimeWaitValue         = 0;
 
 
-int SocketClient::ReceiveData(const char *data, size_t len, Socket *socket) {
-    _cprintf("receive bytes : %.*s\n", len, data);
-    if(len == 5 && strncmp(data, "ping\n", 5) == 0)
+int SocketClient::ReceiveData(const char *data, u_long length, Socket *socket) {
+    _cprintf("receive bytes : %.*s\n", length, data);
+    if(length == 5 && strncmp(data, "ping\n", 5) == 0)
         SendData("pong", 4, socket);
-    else if(len == 5 && strncmp(data, "quit\n", 5) == 0) {
+    else if(length == 5 && strncmp(data, "quit\n", 5) == 0) {
         EnterCriticalSection(&socket->SockCritSec);
         {
             socket->state = Socket::SocketState::CLOSING;
@@ -33,17 +33,17 @@ int SocketClient::ReceiveData(const char *data, size_t len, Socket *socket) {
     return 1;
 }
 
-void SocketClient::SendData(const char *data, size_t len, Socket *socket) {
+void SocketClient::SendData(const char *data, u_long length, Socket *socket) {
     if (socket == nullptr || socket->state != Socket::SocketState::CONNECTED)
         return;
     _cprintf("send %s\n", data);
 
-    while(len > 0){
+    while(length > 0){
         Buffer *sendobj = Buffer::Create(inUseBufferList, Buffer::Operation::Write);
 
-        size_t currentLen = len > Buffer::DEFAULT_BUFFER_SIZE ? Buffer::DEFAULT_BUFFER_SIZE : len;
+        u_long currentLen = length > Buffer::DEFAULT_BUFFER_SIZE ? Buffer::DEFAULT_BUFFER_SIZE : length;
         strncpy(sendobj->buf, data, currentLen);
-        sendobj->buflen = currentLen;
+        sendobj->bufLen = currentLen;
 
         if(PostSend(socket, sendobj) == SOCKET_ERROR){
             EnterCriticalSection(&socket->SockCritSec);
@@ -54,7 +54,7 @@ void SocketClient::SendData(const char *data, size_t len, Socket *socket) {
             Buffer::Delete(sendobj);
             break;
         }
-        len -= currentLen;
+        length -= currentLen;
     }
 }
 
@@ -65,7 +65,7 @@ int SocketClient::PostRecv(Socket *sock, Buffer *recvobj) {
 
     recvobj->operation = Buffer::Operation::Read;
     wbuf.buf = recvobj->buf;
-    wbuf.len = recvobj->buflen;
+    wbuf.len = recvobj->bufLen;
     EnterCriticalSection(&(sock->SockCritSec));
     {
         rc = WSARecv(sock->s,           //s : A descriptor identifying a connected socket.
@@ -98,7 +98,7 @@ int SocketClient::PostSend(Socket *sock, Buffer *sendobj) {
 
     sendobj->operation = Buffer::Operation::Write;
     wbuf.buf = sendobj->buf;
-    wbuf.len = sendobj->buflen;
+    wbuf.len = sendobj->bufLen;
     EnterCriticalSection(&(sock->SockCritSec));
     {
         rc = WSASend(sock->s,           //s : A descriptor identifying a connected socket.
@@ -179,9 +179,9 @@ void SocketClient::HandleIo(Socket *sockobj, Buffer *buf, DWORD BytesTransfered)
         // Receive completed successfully
         if (BytesTransfered > 0) {
 //            InterlockedExchangeAdd(&bytesRead, BytesTransfered);
-            buf->buflen = BytesTransfered;
-            ReceiveData(buf->buf, buf->buflen, sockobj);
-            buf->buflen = Buffer::DEFAULT_BUFFER_SIZE;
+            buf->bufLen = BytesTransfered;
+            ReceiveData(buf->buf, buf->bufLen, sockobj);
+            buf->bufLen = Buffer::DEFAULT_BUFFER_SIZE;
             if (sockobj->state != Socket::SocketState::CONNECTED)
                 Buffer::Delete(buf);
             else if(PostRecv(sockobj, buf) == SOCKET_ERROR) {
@@ -215,7 +215,7 @@ void SocketClient::HandleIo(Socket *sockobj, Buffer *buf, DWORD BytesTransfered)
             sockobj->OutstandingSend--;
         }
         LeaveCriticalSection(&sockobj->SockCritSec);
-        if (BytesTransfered < buf->buflen){ //incomplete send, very small chance of it ever happening, socket send stream most probably corrupted
+        if (BytesTransfered < buf->bufLen){ //incomplete send, very small chance of it ever happening, socket send stream most probably corrupted
             EnterCriticalSection(&sockobj->SockCritSec);
             {
                 sockobj->state = Socket::SocketState::FAILURE;
@@ -334,7 +334,7 @@ DWORD WINAPI SocketClient::IOCPWorkerThread(LPVOID lpParam) {
 
 SocketClient::SocketClient() : state(State::NOT_INITIALIZED), iocpHandle(INVALID_HANDLE_VALUE) {
     int         res;
-    
+
     // ----------------------------- start WSA
     
     WSADATA     wsaData; // gets populated w/ info explaining this sockets implementation

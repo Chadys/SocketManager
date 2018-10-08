@@ -69,7 +69,7 @@ private:
     bool                InitAsyncSocketFuncs();                                                     // Initialize function pointer to needed mswsock functions
     bool                InitAsyncSocketFunc (SOCKET sock, GUID guid, LPVOID func, DWORD size);      // Initialize function pointer to one mswsock function
     void                InitTimeWaitValue   ();                                                     // Initialize TIME_WAIT detected value
-    void                SendData            (const char *data, size_t len, Socket *socket);         // Send a given buffer to the given socket
+    void                SendData            (const char *data, u_long length, Socket *socket);         // Send a given buffer to the given socket
 
 public:
                         SocketClient        ();
@@ -78,8 +78,8 @@ public:
     UUID                ListenToNewSocket   (const char *address, u_short port);                    // Start listening to new read/write event on this socket
     inline bool         isReady             () const                                                { return state == State::READY; };
     inline bool         isSocketReady       (UUID socketId)                                         { Socket *sockObj = socketAccessMap.Get(socketId); return sockObj != nullptr && sockObj->state == Socket::SocketState::CONNECTED; };
-    inline void         SendData            (const char *data, size_t len, UUID socketId)           { return SendData(data, len, socketAccessMap.Get(socketId)); }
-    virtual int         ReceiveData         (const char* data, size_t length, Socket *socket);      // Do what needs to be done when receiving content from a socket //TODO make pure virtual
+    inline void         SendData            (const char *data, u_long length, UUID socketId)        { return SendData(data, length, socketAccessMap.Get(socketId)); }
+    virtual int         ReceiveData         (const char* data, u_long length, Socket *socket);      // Do what needs to be done when receiving content from a socket //TODO make pure virtual
     /* Implementation recommendation :
      * Since a single read can be received by different threads,
      * keep a map socket->buffer as attribute inside your implementing class

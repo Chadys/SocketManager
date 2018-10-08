@@ -102,7 +102,7 @@ class Socket : public ListElt<Socket> {     // Contains all needed information a
     friend class ListElt;
 
 public:
-    Socket(CriticalList<Socket> &l, SocketClient *c, SOCKET s_, int af_)  : ListElt(l),
+    Socket(CriticalList<Socket> &l, SocketClient *c, SOCKET s_, int af_)  : ListElt(l), id(),
                                                                             s(s_), af(af_), state(SocketState::INIT),
                                                                             OutstandingRecv(0), OutstandingSend(0),
                                                                             SockCritSec{}, client(c), timeWaitStartTime(0) {
@@ -160,16 +160,16 @@ private:
 public:
     explicit Buffer(CriticalList<Buffer> &l)                              : Buffer(l, Operation::Read) {}
     Buffer(CriticalList<Buffer> &l, Operation op)                         : ListElt(l),
-                                                                            ol{}, buf(), buflen(DEFAULT_BUFFER_SIZE),
+                                                                            ol{}, buf(), bufLen(DEFAULT_BUFFER_SIZE),
                                                                             operation(op) {}
 
 private:
 
-    static const int        DEFAULT_BUFFER_SIZE     = 4096;
+    static const u_long         DEFAULT_BUFFER_SIZE     = 4096;
 
     WSAOVERLAPPED               ol;
     char                        buf[DEFAULT_BUFFER_SIZE]; // Buffer for recv/send
-    size_t                      buflen;
+    u_long                      bufLen;
     Operation                   operation;              // Type of operation issued
 
 };
