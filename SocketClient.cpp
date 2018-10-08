@@ -9,7 +9,6 @@
 //TODO set default options (see chromium)
 //all SO_REUSE_UNICASTPORT
 //TODO check python windows implementation
-//TODO gard against socket pointer problems
 //TODO if connect of previously disconnected socket fail, double wait_time
 
 LPFN_CONNECTEX          SocketClient::ConnectEx             = nullptr;
@@ -35,7 +34,7 @@ int SocketClient::ReceiveData(const char *data, size_t len, Socket *socket) {
 }
 
 void SocketClient::SendData(const char *data, size_t len, Socket *socket) {
-    if (socket->state != Socket::SocketState::CONNECTED)
+    if (socket == nullptr || socket->state != Socket::SocketState::CONNECTED)
         return;
     _cprintf("send %s\n", data);
 
@@ -134,6 +133,9 @@ void SocketClient::HandleError(Socket *sockobj, Buffer *buf, DWORD error) {
     {
         switch (buf->operation){
             case Buffer::Operation::Connect :{
+                if (error == WSAEADDRINUSE){ // TimeWaitValue must not have been big enough, update it and connect another socket instead
+                    //TODO use GUID
+                }
                 sockobj->state = Socket::SocketState::CONNECT_FAILURE;
                 break;
             }
@@ -158,7 +160,7 @@ void SocketClient::HandleError(Socket *sockobj, Buffer *buf, DWORD error) {
     }
     LeaveCriticalSection(&sockobj->SockCritSec);
     if(cleanupSocket)
-        Socket::Delete(sockobj);
+        Socket::DeleteOrDisconnect(sockobj, socketAccessMap);
     Buffer::Delete(buf);
 
 }
@@ -285,7 +287,7 @@ void SocketClient::HandleIo(Socket *sockobj, Buffer *buf, DWORD BytesTransfered)
     LeaveCriticalSection(&sockobj->SockCritSec);
 
     if (cleanupSocket) {
-        Socket::Delete(sockobj);
+        Socket::DeleteOrDisconnect(sockobj, socketAccessMap);
     }
 }
 
@@ -364,13 +366,6 @@ SocketClient::SocketClient() : state(State::NOT_INITIALIZED), iocpHandle(INVALID
     SYSTEM_INFO SystemInfo;
     GetSystemInfo(&SystemInfo);
 
-    // ----------------------------- init critical sections
-
-    InitializeCriticalSection(&inUseBufferList.critSec);
-    InitializeCriticalSection(&inUseSocketList.critSec);
-    InitializeCriticalSection(&reusableSocketList.critSec);
-    state = State::CRIT_SEC_INITIALIZED;
-
     // ----------------------------- create worker threads
 
     HANDLE      ThreadHandle;
@@ -407,11 +402,6 @@ SocketClient::~SocketClient() {
     }
     ListElt<Socket>::ClearList(inUseSocketList);
     ListElt<Buffer>::ClearList(inUseBufferList);
-    if(state >= State::CRIT_SEC_INITIALIZED){
-        DeleteCriticalSection(&inUseBufferList.critSec);
-        DeleteCriticalSection(&inUseSocketList.critSec);
-        DeleteCriticalSection(&reusableSocketList.critSec);
-    }
     if(state >= State::IOCP_INITIALIZED){
         CloseHandle(iocpHandle);
     }
@@ -445,10 +435,12 @@ void SocketClient::ClearThreads() {
     }
 }
 
-Socket* SocketClient::ListenToNewSocket(const char *address, u_short port) {
+UUID SocketClient::ListenToNewSocket(const char *address, u_short port) {
     int err;
+    UUID id;
+    UuidCreateNil(&id);
     if (state < State::READY)
-        return nullptr;
+        return id;
 
     // ----------------------------- create socket
 
@@ -464,7 +456,7 @@ Socket* SocketClient::ListenToNewSocket(const char *address, u_short port) {
                               WSA_FLAG_OVERLAPPED          //dwFlags : A set of flags used to specify additional socket attributes. WSA_FLAG_OVERLAPPED -> Create a socket that supports overlapped I/O operations.
         )) == INVALID_SOCKET) {
             _cprintf("WSASocket failed / error %d\n", WSAGetLastError());
-            return nullptr;
+            return id;
         }
         _cprintf("WSASocket ok\n");
         const int fam = FAMILY;
@@ -489,7 +481,7 @@ Socket* SocketClient::ListenToNewSocket(const char *address, u_short port) {
         if (hrc == nullptr) {
             _cprintf("CreateIoCompletionPort failed / error %d\n", GetLastError());
             Socket::Delete(sockObj);
-            return nullptr;
+            return id;
         }
         sockObj->state = Socket::SocketState::ASSOCIATED;
         _cprintf("CreateIoCompletionPort ok\n");
@@ -501,7 +493,7 @@ Socket* SocketClient::ListenToNewSocket(const char *address, u_short port) {
                 ) == SOCKET_ERROR){
             _cprintf("bind failed / error %d\n", WSAGetLastError());
             Socket::Delete(sockObj);
-            return nullptr;
+            return id;
         }
         _cprintf("bind ok\n");
         sockObj->state = Socket::SocketState::BOUND;
@@ -513,7 +505,7 @@ Socket* SocketClient::ListenToNewSocket(const char *address, u_short port) {
         //WSANOTINITIALISED, WSAENETDOWN, WSAENOTSOCK, WSAEFAULT
         _cprintf("WSAHtonl failed / error %d\n", GetLastError());
         Socket::Delete(sockObj);
-        return nullptr;
+        return id;
     }
 
     Buffer *connectobj = Buffer::Create(inUseBufferList, Buffer::Operation::Connect);
@@ -528,11 +520,19 @@ Socket* SocketClient::ListenToNewSocket(const char *address, u_short port) {
         if ((err = WSAGetLastError()) != WSA_IO_PENDING) {
             _cprintf("ListenToNewSocket: ConnectEx failed: %d\n", err);
             Socket::Delete(sockObj);
-            return nullptr; // connect error
+            return id; // connect error
         }
     }
     _cprintf("ConnectEx ok\n");
-    return sockObj;
+    RPC_STATUS status = UuidCreateSequential(&sockObj->id);
+    if (status == RPC_S_UUID_NO_ADDRESS)
+        UuidCreate(&sockObj->id);
+    EnterCriticalSection(&socketAccessMap.critSec);
+    {
+        socketAccessMap.map[sockObj->id] = sockObj;
+    }
+    LeaveCriticalSection(&socketAccessMap.critSec);
+    return sockObj->id;
 }
 
 bool SocketClient::InitAsyncSocketFuncs() {

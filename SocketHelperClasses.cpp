@@ -5,10 +5,23 @@ void Socket::Delete(Socket *obj) {
     EnterCriticalSection(&obj->SockCritSec);
     {
         // Close the socket if it hasn't already been closed
+        if (obj->s != INVALID_SOCKET && obj->state >= CONNECTED) { //CONNECTED or FAILURE
+            _cprintf("Socket::Delete: closing socket\n");
+            obj->Close();
+        }
+    }
+    LeaveCriticalSection(&obj->SockCritSec);
+    ListElt<Socket>::Delete(obj);
+}
+
+void Socket::DeleteOrDisconnect(Socket *obj, CriticalMap<UUID, Socket*> &critMap) {
+    EnterCriticalSection(&obj->SockCritSec);
+    {
+        // Close the socket if it hasn't already been closed
         if (obj->s != INVALID_SOCKET) {
             if (obj->state == CLOSING){
                 _cprintf("Socket::Delete: disconnecting socket\n");
-                obj->Disconnect();
+                obj->Disconnect(critMap);
                 LeaveCriticalSection(&obj->SockCritSec);
                 return;
             } else if (obj->state >= CONNECTED) { //CONNECTED or FAILURE
@@ -18,11 +31,16 @@ void Socket::Delete(Socket *obj) {
         }
     }
     LeaveCriticalSection(&obj->SockCritSec);
+    EnterCriticalSection(&critMap.critSec);
+    {
+        critMap.map.erase(obj->id);
+    }
+    LeaveCriticalSection(&critMap.critSec);
 
     ListElt<Socket>::Delete(obj);
 }
 
-void Socket::Disconnect() {
+void Socket::Disconnect(CriticalMap<UUID, Socket*> &critMap) {
     int err;
 
     // ----------------------------- enqueue disconnect operation
@@ -36,7 +54,7 @@ void Socket::Disconnect() {
             _cprintf("Socket::Delete: DisconnectEx failed: %d\n", err);
             state = Socket::SocketState::FAILURE;
             LeaveCriticalSection(&SockCritSec);
-            return Socket::Delete(this);
+            return Socket::DeleteOrDisconnect(this, critMap);
         }
     }
     _cprintf("DisconnectEx ok\n");

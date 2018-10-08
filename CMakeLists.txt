@@ -5,4 +5,4 @@ set(CMAKE_CXX_STANDARD 17)
 
 add_executable(SocketClient main.cpp SocketClient.cpp SocketClient.h SocketHelperClasses.cpp SocketHelperClasses.h Misc.cpp Misc.h)
 
-target_link_libraries(SocketClient ws2_32)
+target_link_libraries(SocketClient ws2_32 rpcrt4)

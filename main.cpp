@@ -5,13 +5,15 @@ static const u_short    port                    = 55555;
 
 int main(){
     SocketClient    client;
-    Socket          *socket;
+    UUID            socketId;
+    RPC_STATUS      status;
+
     if(client.isReady()) {
-        if((socket = client.ListenToNewSocket(address, port)) != nullptr) {
+        socketId = client.ListenToNewSocket(address, port);
+        if (!UuidIsNil(&socketId, &status)) {
             for (;;) {
-                if (socket->IsDisconnected()) {
-//                    Sleep(300000); // Sleep five minutes
-                    socket = client.ListenToNewSocket(address, port);
+                if (!client.isSocketReady(socketId)) {
+                    socketId = client.ListenToNewSocket(address, port);
                 }
             }
         }

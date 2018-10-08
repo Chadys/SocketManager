@@ -6,19 +6,44 @@
 #include <windows.h>
 #include <conio.h>
 #include <list>
+#include <unordered_map>
+#include "Misc.h"
 
 class SocketClient;
 
-/*********** CriticalList *********/
-template<typename T>
-class CriticalList {                        // Practical class to gather up a list and its critical section
-
+/*********** CriticalContainers *********/                        // Practical class to gather up a container and its critical section
+class CriticalContainerWrapper{
 public:
-    CRITICAL_SECTION            critSec;
+    CRITICAL_SECTION            critSec{};
+    CriticalContainerWrapper    ()  { InitializeCriticalSection(&critSec); }
+    ~CriticalContainerWrapper   ()  { DeleteCriticalSection(&critSec); }
+};
+
+template<typename T>
+class CriticalList : public CriticalContainerWrapper {
+public:
     std::list<T>                list;
 
 };
-//////////// CriticalList //////////
+template<typename T, typename U>
+class CriticalMap : public CriticalContainerWrapper {
+
+public:
+    std::unordered_map<T,U>     map;
+
+    U           Get     (T key) {        //convenient way to access an element
+        U value = U();
+        EnterCriticalSection(&critSec);
+        {
+            auto it = map.find(key);
+            if (it != map.end())
+                value = it->second;
+        }
+        LeaveCriticalSection(&critSec);
+        return value;
+    }
+};
+//////////// CriticalContainers //////////
 
 /************* ListElt ***********/
 template<typename T>
@@ -74,9 +99,9 @@ public:
 /************* Socket ***********/
 class Socket : public ListElt<Socket> {     // Contains all needed information about one socket
     friend class SocketClient;
+    friend class ListElt;
 
 public:
-    inline bool IsDisconnected(){return state == SocketState::BOUND;}//TODO remove
     Socket(CriticalList<Socket> &l, SocketClient *c, SOCKET s_, int af_)  : ListElt(l),
                                                                             s(s_), af(af_), state(SocketState::INIT),
                                                                             OutstandingRecv(0), OutstandingSend(0),
@@ -86,7 +111,6 @@ public:
     ~Socket(){
         DeleteCriticalSection(&SockCritSec);
     }
-    static void     Delete      (Socket *obj);                            // Close socket before deleting it
 
 private:
     enum SocketState {
@@ -99,6 +123,7 @@ private:
         FAILURE
     };
 
+    UUID                        id;                     // Socket unique identifier (used to store it in a map
     SOCKET                      s;                      // Socket handle
     SocketState                 state;                  //state the socket is in
     int                         af;                     // Address family of socket
@@ -108,8 +133,10 @@ private:
     SocketClient*               client;                 // Pointer to containing class
     DWORD                       timeWaitStartTime;      // Counter to test if socket has gotten out of TIME_WAIT state after a disconnect
 
-    void            Disconnect  ();                     // Disconnect socket so it can be used again
-    void            Close       ();                     // Permanently close connexion
+    static void     Delete                  (Socket *obj);                                          // Close socket before deleting it
+    static void     DeleteOrDisconnect      (Socket *obj, CriticalMap<UUID, Socket*> &critMap);     // Close socket before deleting it
+    void            Disconnect              (CriticalMap<UUID, Socket*> &critMap);                  // Disconnect socket so it can be used again
+    void            Close                   ();                                                     // Permanently close connexion
 
 };
 ////////////// Socket ////////////
@@ -148,7 +175,12 @@ private:
 };
 ////////////// Buffer ////////////
 
+
+/************* Explicit Template Declaration ***********/
+
 template class ListElt<Buffer>;
 template class ListElt<Socket>;
+
+////////////// Explicite Template Declaration ////////////
 
 #endif //SOCKETCLIENT_SOCKETHELPERCLASSES_H
