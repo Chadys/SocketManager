@@ -10,6 +10,7 @@
 //all SO_REUSE_UNICASTPORT
 //TODO check python windows implementation
 //TODO if connect of previously disconnected socket fail, double wait_time
+//TODO _cprintf use __FUNC__
 
 LPFN_CONNECTEX          SocketClient::ConnectEx             = nullptr;
 LPFN_DISCONNECTEX       SocketClient::DisconnectEx          = nullptr;
@@ -134,9 +135,15 @@ void SocketClient::HandleError(Socket *sockobj, Buffer *buf, DWORD error) {
         switch (buf->operation){
             case Buffer::Operation::Connect :{
                 if (error == WSAEADDRINUSE){ // TimeWaitValue must not have been big enough, update it and connect another socket instead
-                    //TODO use GUID
+                    TimeWaitValue *= 2;
+                    if (TimeWaitValue > MAX_TIME_WAIT_VALUE)
+                        TimeWaitValue = MAX_TIME_WAIT_VALUE;
+                    ListenToNewSocket(sockobj->address, sockobj->port, sockobj->id);
+                    sockobj->s = INVALID_SOCKET;
+                    sockobj->state = Socket::SocketState::RETRY_CONNECTION;
+                } else {
+                    sockobj->state = Socket::SocketState::CONNECT_FAILURE;
                 }
-                sockobj->state = Socket::SocketState::CONNECT_FAILURE;
                 break;
             }
             case Buffer::Operation::Read :{
@@ -162,133 +169,146 @@ void SocketClient::HandleError(Socket *sockobj, Buffer *buf, DWORD error) {
     if(cleanupSocket)
         Socket::DeleteOrDisconnect(sockobj, socketAccessMap);
     Buffer::Delete(buf);
-
 }
 
-void SocketClient::HandleIo(Socket *sockobj, Buffer *buf, DWORD BytesTransfered) {
+void SocketClient::HandleIo(Socket *sockObj, Buffer *buf, DWORD bytesTransfered) {
     bool    cleanupSocket   = false;
 
     if (buf->operation == Buffer::Operation::Read) {
-        EnterCriticalSection(&sockobj->SockCritSec);
-        {
-            sockobj->OutstandingRecv--;
-        }
-        LeaveCriticalSection(&sockobj->SockCritSec);
-        _cprintf("read\n");
-
-        // Receive completed successfully
-        if (BytesTransfered > 0) {
-//            InterlockedExchangeAdd(&bytesRead, BytesTransfered);
-            buf->bufLen = BytesTransfered;
-            ReceiveData(buf->buf, buf->bufLen, sockobj);
-            buf->bufLen = Buffer::DEFAULT_BUFFER_SIZE;
-            if (sockobj->state != Socket::SocketState::CONNECTED)
-                Buffer::Delete(buf);
-            else if(PostRecv(sockobj, buf) == SOCKET_ERROR) {
-                _cprintf("HandleIo: PostRecv failed!\n");
-                EnterCriticalSection(&sockobj->SockCritSec);
-                {
-                    sockobj->state = Socket::SocketState::FAILURE;
-                }
-                LeaveCriticalSection(&sockobj->SockCritSec);
-                Buffer::Delete(buf);
-            }
-        }
-        else {
-            _cprintf("Received 0 byte\n");
-            // Graceful close - the receive returned 0 bytes read
-            EnterCriticalSection(&sockobj->SockCritSec);
-            {
-                sockobj->state = Socket::SocketState::CLOSING;
-            }
-            LeaveCriticalSection(&sockobj->SockCritSec);
-            // Free the receive buffer
-            Buffer::Delete(buf);
-        }
+        HandleRead(sockObj, buf, bytesTransfered);
     }
     else if (buf->operation == Buffer::Operation::Write) {
-        _cprintf("write\n");
-
-        // Update the counters
-        EnterCriticalSection(&sockobj->SockCritSec);
-        {
-            sockobj->OutstandingSend--;
-        }
-        LeaveCriticalSection(&sockobj->SockCritSec);
-        if (BytesTransfered < buf->bufLen){ //incomplete send, very small chance of it ever happening, socket send stream most probably corrupted
-            EnterCriticalSection(&sockobj->SockCritSec);
-            {
-                sockobj->state = Socket::SocketState::FAILURE;
-            }
-            LeaveCriticalSection(&sockobj->SockCritSec);
-        }
-
-//        InterlockedExchangeAdd(&bytesSent, BytesTransfered);
-
-        Buffer::Delete(buf);
+        HandleWrite(sockObj, buf, bytesTransfered);
     }
     else if (buf->operation == Buffer::Operation::Connect || buf->operation == Buffer::Operation::Accept ) {
-        EnterCriticalSection(&sockobj->SockCritSec);
-        {
-            sockobj->state = Socket::SocketState::CONNECTED;
-        }
-        LeaveCriticalSection(&sockobj->SockCritSec);
-        _cprintf("connected\n");
-        int err = NO_ERROR;
-        int option = buf->operation == Buffer::Operation::Connect
-                   ? SO_UPDATE_CONNECT_CONTEXT              //This option is used with the ConnectEx, WSAConnectByList, and WSAConnectByName functions. This option updates the properties of the socket after the connection is established. This option should be set if the getpeername, getsockname, getsockopt, setsockopt, or shutdown functions are to be used on the connected socket.
-                   : SO_UPDATE_ACCEPT_CONTEXT;              //This option is used with the AcceptEx function. This option updates the properties of the socket which are inherited from the listening socket. This option should be set if the getpeername, getsockname, getsockopt, or setsockopt functions are to be used on the accepted socket.
-        // ----------------------------- set needed options
-        if(setsockopt(sockobj->s, SOL_SOCKET, option, nullptr, 0 ) == SOCKET_ERROR){ //shouldn't ever happens
-            err = WSAGetLastError();
-            _cprintf("HandleIo: setsockopt failed : %d\n", err);
-        }
-        // ----------------------------- trigger first recv
-        buf->operation = Buffer::Operation::Read;
-        if(PostRecv(sockobj, buf) == SOCKET_ERROR){
-            err = SOCKET_ERROR;
-            _cprintf("HandleIo: PostRecv failed!\n");
-        }
-        if (err != NO_ERROR){
-            EnterCriticalSection(&sockobj->SockCritSec);
-            {
-                sockobj->state = Socket::SocketState::FAILURE;
-            }
-            LeaveCriticalSection(&sockobj->SockCritSec);
-            Buffer::Delete(buf);
-        }
+        HandleConnection(sockObj, buf);
     }
     else if (buf->operation == Buffer::Operation::Disconnect ) {
-        EnterCriticalSection(&sockobj->SockCritSec);
-        {
-            sockobj->state = Socket::SocketState::BOUND;
-            sockobj->timeWaitStartTime = GetTickCount();
-        }
-        LeaveCriticalSection(&sockobj->SockCritSec);
-        EnterCriticalSection(&reusableSocketList.critSec);
-        {
-            reusableSocketList.list.push_back(sockobj); //TODO test if queue is already too big
-        }
-        LeaveCriticalSection(&reusableSocketList.critSec);
-        _cprintf("disconnected\n");
-        Buffer::Delete(buf);
+        HandleDisconnect(sockObj, buf);
     }
     else {
         _cprintf("op ?");
     }
 
     // If this was the last outstanding operation on closing socket, clean it up
-    EnterCriticalSection(&sockobj->SockCritSec);
+    EnterCriticalSection(&sockObj->SockCritSec);
     {
-        if ((sockobj->OutstandingSend == 0) && (sockobj->OutstandingRecv == 0) && (sockobj->state > Socket::SocketState::CONNECTED)) {
+        if ((sockObj->OutstandingSend == 0) && (sockObj->OutstandingRecv == 0) && (sockObj->state > Socket::SocketState::CONNECTED)) {
             cleanupSocket = true;
         }
     }
-    LeaveCriticalSection(&sockobj->SockCritSec);
+    LeaveCriticalSection(&sockObj->SockCritSec);
 
     if (cleanupSocket) {
-        Socket::DeleteOrDisconnect(sockobj, socketAccessMap);
+        Socket::DeleteOrDisconnect(sockObj, socketAccessMap);
     }
+}
+
+void SocketClient::HandleRead(Socket *sockObj, Buffer *buf, DWORD bytesTransfered) {
+    EnterCriticalSection(&sockObj->SockCritSec);
+    {
+        sockObj->OutstandingRecv--;
+    }
+    LeaveCriticalSection(&sockObj->SockCritSec);
+    _cprintf("read\n");
+
+    // Receive completed successfully
+    if (bytesTransfered > 0) {
+//            InterlockedExchangeAdd(&bytesRead, bytesTransfered);
+        buf->bufLen = bytesTransfered;
+        ReceiveData(buf->buf, buf->bufLen, sockObj);
+        buf->bufLen = Buffer::DEFAULT_BUFFER_SIZE;
+        if (sockObj->state != Socket::SocketState::CONNECTED)
+            Buffer::Delete(buf);
+        else if(PostRecv(sockObj, buf) == SOCKET_ERROR) {
+            _cprintf("HandleIo: PostRecv failed!\n");
+            EnterCriticalSection(&sockObj->SockCritSec);
+            {
+                sockObj->state = Socket::SocketState::FAILURE;
+            }
+            LeaveCriticalSection(&sockObj->SockCritSec);
+            Buffer::Delete(buf);
+        }
+    }
+    else {
+        _cprintf("Received 0 byte\n");
+        // Graceful close - the receive returned 0 bytes read
+        EnterCriticalSection(&sockObj->SockCritSec);
+        {
+            sockObj->state = Socket::SocketState::CLOSING;
+        }
+        LeaveCriticalSection(&sockObj->SockCritSec);
+        // Free the receive buffer
+        Buffer::Delete(buf);
+    }
+}
+
+void SocketClient::HandleWrite(Socket *sockObj, Buffer *buf, DWORD bytesTransfered) {
+    _cprintf("write\n");
+
+    // Update the counters
+    EnterCriticalSection(&sockObj->SockCritSec);
+    {
+        sockObj->OutstandingSend--;
+    }
+    LeaveCriticalSection(&sockObj->SockCritSec);
+    if (bytesTransfered < buf->bufLen){ //incomplete send, very small chance of it ever happening, socket send stream most probably corrupted
+        EnterCriticalSection(&sockObj->SockCritSec);
+        {
+            sockObj->state = Socket::SocketState::FAILURE;
+        }
+        LeaveCriticalSection(&sockObj->SockCritSec);
+    }
+
+    Buffer::Delete(buf);
+}
+
+void SocketClient::HandleConnection(Socket *sockObj, Buffer *buf) {
+    EnterCriticalSection(&sockObj->SockCritSec);
+    {
+        sockObj->state = Socket::SocketState::CONNECTED;
+    }
+    LeaveCriticalSection(&sockObj->SockCritSec);
+    _cprintf("connected\n");
+    int err = NO_ERROR;
+    int option = buf->operation == Buffer::Operation::Connect
+                 ? SO_UPDATE_CONNECT_CONTEXT              //This option is used with the ConnectEx, WSAConnectByList, and WSAConnectByName functions. This option updates the properties of the socket after the connection is established. This option should be set if the getpeername, getsockname, getsockopt, setsockopt, or shutdown functions are to be used on the connected socket.
+                 : SO_UPDATE_ACCEPT_CONTEXT;              //This option is used with the AcceptEx function. This option updates the properties of the socket which are inherited from the listening socket. This option should be set if the getpeername, getsockname, getsockopt, or setsockopt functions are to be used on the accepted socket.
+    // ----------------------------- set needed options
+    if(setsockopt(sockObj->s, SOL_SOCKET, option, nullptr, 0 ) == SOCKET_ERROR){ //shouldn't ever happens
+        err = WSAGetLastError();
+        _cprintf("HandleIo: setsockopt failed : %d\n", err);
+    }
+    // ----------------------------- trigger first recv
+    buf->operation = Buffer::Operation::Read;
+    if(PostRecv(sockObj, buf) == SOCKET_ERROR){
+        err = SOCKET_ERROR;
+        _cprintf("HandleIo: PostRecv failed!\n");
+    }
+    if (err != NO_ERROR){
+        EnterCriticalSection(&sockObj->SockCritSec);
+        {
+            sockObj->state = Socket::SocketState::FAILURE;
+        }
+        LeaveCriticalSection(&sockObj->SockCritSec);
+        Buffer::Delete(buf);
+    }
+}
+
+void SocketClient::HandleDisconnect(Socket *sockObj, Buffer *buf) {
+    EnterCriticalSection(&sockObj->SockCritSec);
+    {
+        sockObj->state = Socket::SocketState::BOUND;
+        sockObj->timeWaitStartTime = GetTickCount();
+    }
+    LeaveCriticalSection(&sockObj->SockCritSec);
+    EnterCriticalSection(&reusableSocketList.critSec);
+    {
+        reusableSocketList.list.push_back(sockObj);
+    }
+    LeaveCriticalSection(&reusableSocketList.critSec);
+    _cprintf("disconnected\n");
+    Buffer::Delete(buf);
 }
 
 DWORD WINAPI SocketClient::IOCPWorkerThread(LPVOID lpParam) {
@@ -435,12 +455,12 @@ void SocketClient::ClearThreads() {
     }
 }
 
-UUID SocketClient::ListenToNewSocket(const char *address, u_short port) {
+UUID SocketClient::ListenToNewSocket(const char *address, u_short port, UUID id) {
     int err;
-    UUID id;
-    UuidCreateNil(&id);
+    UUID nullId;
+    UuidCreateNil(&nullId);
     if (state < State::READY)
-        return id;
+        return nullId;
 
     // ----------------------------- create socket
 
@@ -456,7 +476,7 @@ UUID SocketClient::ListenToNewSocket(const char *address, u_short port) {
                               WSA_FLAG_OVERLAPPED          //dwFlags : A set of flags used to specify additional socket attributes. WSA_FLAG_OVERLAPPED -> Create a socket that supports overlapped I/O operations.
         )) == INVALID_SOCKET) {
             _cprintf("WSASocket failed / error %d\n", WSAGetLastError());
-            return id;
+            return nullId;
         }
         _cprintf("WSASocket ok\n");
         const int fam = FAMILY;
@@ -464,6 +484,8 @@ UUID SocketClient::ListenToNewSocket(const char *address, u_short port) {
     } else {
         sock = sockObj->s;
     }
+    sockObj->address = address;
+    sockObj->port = port;
 
     SOCKADDR_IN SockAddr;
     ZeroMemory(&SockAddr, sizeof(SOCKADDR_IN));
@@ -481,7 +503,7 @@ UUID SocketClient::ListenToNewSocket(const char *address, u_short port) {
         if (hrc == nullptr) {
             _cprintf("CreateIoCompletionPort failed / error %d\n", GetLastError());
             Socket::Delete(sockObj);
-            return id;
+            return nullId;
         }
         sockObj->state = Socket::SocketState::ASSOCIATED;
         _cprintf("CreateIoCompletionPort ok\n");
@@ -493,7 +515,7 @@ UUID SocketClient::ListenToNewSocket(const char *address, u_short port) {
                 ) == SOCKET_ERROR){
             _cprintf("bind failed / error %d\n", WSAGetLastError());
             Socket::Delete(sockObj);
-            return id;
+            return nullId;
         }
         _cprintf("bind ok\n");
         sockObj->state = Socket::SocketState::BOUND;
@@ -505,7 +527,7 @@ UUID SocketClient::ListenToNewSocket(const char *address, u_short port) {
         //WSANOTINITIALISED, WSAENETDOWN, WSAENOTSOCK, WSAEFAULT
         _cprintf("WSAHtonl failed / error %d\n", GetLastError());
         Socket::Delete(sockObj);
-        return id;
+        return nullId;
     }
 
     Buffer *connectobj = Buffer::Create(inUseBufferList, Buffer::Operation::Connect);
@@ -520,13 +542,17 @@ UUID SocketClient::ListenToNewSocket(const char *address, u_short port) {
         if ((err = WSAGetLastError()) != WSA_IO_PENDING) {
             _cprintf("ListenToNewSocket: ConnectEx failed: %d\n", err);
             Socket::Delete(sockObj);
-            return id; // connect error
+            return nullId; // connect error
         }
     }
     _cprintf("ConnectEx ok\n");
-    RPC_STATUS status = UuidCreateSequential(&sockObj->id);
-    if (status == RPC_S_UUID_NO_ADDRESS)
-        UuidCreate(&sockObj->id);
+    RPC_STATUS status;
+    if (UuidIsNil(&id, &status)) {
+        status = UuidCreateSequential(&id);
+        if (status == RPC_S_UUID_NO_ADDRESS)
+            UuidCreate(&id);
+    }
+    sockObj->id = id;
     EnterCriticalSection(&socketAccessMap.critSec);
     {
         socketAccessMap.map[sockObj->id] = sockObj;
@@ -611,4 +637,14 @@ Socket *SocketClient::ReuseSocket() {
     }
     LeaveCriticalSection(&reusableSocketList.critSec);
     return sockObj;
+}
+
+bool SocketClient::ShouldReuseSocket() {
+    bool reuse;
+    EnterCriticalSection(&reusableSocketList.critSec);
+    {
+        reuse = reusableSocketList.list.size() < MAX_UNUSED_SOCKET;
+    }
+    LeaveCriticalSection(&reusableSocketList.critSec);
+    return reuse;
 }

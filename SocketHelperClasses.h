@@ -102,7 +102,7 @@ class Socket : public ListElt<Socket> {     // Contains all needed information a
     friend class ListElt;
 
 public:
-    Socket(CriticalList<Socket> &l, SocketClient *c, SOCKET s_, int af_)  : ListElt(l), id(),
+    Socket(CriticalList<Socket> &l, SocketClient *c, SOCKET s_, int af_)  : ListElt(l), id(), address(""), port(0),
                                                                             s(s_), af(af_), state(SocketState::INIT),
                                                                             OutstandingRecv(0), OutstandingSend(0),
                                                                             SockCritSec{}, client(c), timeWaitStartTime(0) {
@@ -117,6 +117,7 @@ private:
         INIT,
         ASSOCIATED,
         BOUND,
+        RETRY_CONNECTION,
         CONNECT_FAILURE,
         CONNECTED,
         CLOSING,
@@ -125,7 +126,9 @@ private:
 
     UUID                        id;                     // Socket unique identifier (used to store it in a map
     SOCKET                      s;                      // Socket handle
-    SocketState                 state;                  //state the socket is in
+    const char *                address;                // IP address of connection
+    u_short                     port;                   // Port of connection
+    SocketState                 state;                  // State the socket is in
     int                         af;                     // Address family of socket
     volatile LONG               OutstandingRecv,        // Number of outstanding overlapped ops on
                                 OutstandingSend;

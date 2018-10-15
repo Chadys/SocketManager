@@ -19,23 +19,26 @@ void Socket::DeleteOrDisconnect(Socket *obj, CriticalMap<UUID, Socket*> &critMap
     {
         // Close the socket if it hasn't already been closed
         if (obj->s != INVALID_SOCKET) {
-            if (obj->state == CLOSING){
+            if (obj->state == CLOSING && obj->client->ShouldReuseSocket()){
                 _cprintf("Socket::Delete: disconnecting socket\n");
                 obj->Disconnect(critMap);
                 LeaveCriticalSection(&obj->SockCritSec);
                 return;
-            } else if (obj->state >= CONNECTED) { //CONNECTED or FAILURE
+            } else if (obj->state >= CONNECTED) { //CONNECTED, CLOSING or FAILURE
                 _cprintf("Socket::Delete: closing socket\n");
                 obj->Close();
             }
         }
+        if (obj->state != RETRY_CONNECTION) {
+            EnterCriticalSection(&critMap.critSec);
+            {
+                critMap.map.erase(obj->id);
+            }
+            LeaveCriticalSection(&critMap.critSec);
+        }
     }
     LeaveCriticalSection(&obj->SockCritSec);
-    EnterCriticalSection(&critMap.critSec);
-    {
-        critMap.map.erase(obj->id);
-    }
-    LeaveCriticalSection(&critMap.critSec);
+
 
     ListElt<Socket>::Delete(obj);
 }
