@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.12)
-project(SocketClient)
+project(SocketManager)
 
 set(CMAKE_CXX_STANDARD 17)
 
-add_executable(SocketClient main.cpp SocketClient.cpp SocketClient.h SocketHelperClasses.cpp SocketHelperClasses.h Misc.cpp Misc.h)
+add_executable(SocketManager main.cpp SocketManager.cpp SocketManager.h SocketHelperClasses.cpp SocketHelperClasses.h Misc.cpp Misc.h)
 
-target_link_libraries(SocketClient ws2_32 rpcrt4)
+target_link_libraries(SocketManager ws2_32 rpcrt4)

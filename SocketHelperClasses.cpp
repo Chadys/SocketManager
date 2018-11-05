@@ -1,13 +1,13 @@
-#include "SocketClient.h"
+#include "SocketManager.h"
 
 
 void Socket::Delete(Socket *obj) {
     EnterCriticalSection(&obj->SockCritSec);
     {
         // Close the socket if it hasn't already been closed
-        if (obj->s != INVALID_SOCKET && obj->state >= CONNECTED) { //CONNECTED or FAILURE
+        if (obj->s != INVALID_SOCKET && (obj->state == CONNECTED || obj->state == FAILURE)) {
             _cprintf("Socket::Delete: closing socket\n");
-            obj->Close();
+            obj->Close(obj->state == FAILURE);
         }
     }
     LeaveCriticalSection(&obj->SockCritSec);
@@ -15,18 +15,32 @@ void Socket::Delete(Socket *obj) {
 }
 
 void Socket::DeleteOrDisconnect(Socket *obj, CriticalMap<UUID, Socket*> &critMap) {
+    bool needDelete;
+
     EnterCriticalSection(&obj->SockCritSec);
     {
         // Close the socket if it hasn't already been closed
-        if (obj->s != INVALID_SOCKET) {
-            if (obj->state == CLOSING && obj->client->ShouldReuseSocket()){
-                _cprintf("Socket::Delete: disconnecting socket\n");
-                obj->Disconnect(critMap);
-                LeaveCriticalSection(&obj->SockCritSec);
-                return;
-            } else if (obj->state >= CONNECTED) { //CONNECTED, CLOSING or FAILURE
-                _cprintf("Socket::Delete: closing socket\n");
-                obj->Close();
+        if (obj->state < DISCONNECTING) {
+            switch (obj->state){
+                case CLOSING : {
+                    if (obj->client->ShouldReuseSocket()) {
+                        _cprintf("Socket::Delete: disconnecting socket\n");
+                        obj->Disconnect(critMap);
+                        return;
+                    }
+                    /** NOBREAK **/
+                }
+                case CONNECTED :{
+                    _cprintf("Socket::Delete: closing socket\n");
+                    obj->Close(false);
+                    break;
+                }
+                case FAILURE : /** NOBREAK **/
+                case LISTENING :{
+                    _cprintf("Socket::Delete: closing socket\n");
+                    obj->Close(true);
+                    break;
+                }
             }
         }
         if (obj->state != RETRY_CONNECTION) {
@@ -36,11 +50,11 @@ void Socket::DeleteOrDisconnect(Socket *obj, CriticalMap<UUID, Socket*> &critMap
             }
             LeaveCriticalSection(&critMap.critSec);
         }
+        needDelete = obj->state == CLOSED || obj->state == RETRY_CONNECTION;
     }
     LeaveCriticalSection(&obj->SockCritSec);
-
-
-    ListElt<Socket>::Delete(obj);
+    if (needDelete)
+        ListElt<Socket>::Delete(obj);
 }
 
 void Socket::Disconnect(CriticalMap<UUID, Socket*> &critMap) {
@@ -48,7 +62,7 @@ void Socket::Disconnect(CriticalMap<UUID, Socket*> &critMap) {
 
     // ----------------------------- enqueue disconnect operation
     Buffer *disconnectobj = Buffer::Create(client->inUseBufferList, Buffer::Operation::Disconnect);
-    if (!SocketClient::DisconnectEx(s,                           // hSocket : A handle to a connected, connection-oriented socket.
+    if (!SocketManager::DisconnectEx(s,                           // hSocket : A handle to a connected, connection-oriented socket.
                                     &(disconnectobj->ol),        // lpOverlapped : A pointer to an OVERLAPPED structure. If the socket handle has been opened as overlapped, specifying this parameter results in an overlapped (asynchronous) I/O operation.
                                     TF_REUSE_SOCKET,             // dwFlags : A set of flags that customizes processing of the function call. TF_REUSE_SOCKET -> Prepares the socket handle to be reused. When the DisconnectEx request completes, the socket handle can be passed to the AcceptEx or ConnectEx function.
                                     0                            // reserved : Reserved. Must be zero. If nonzero, WSAEINVAL is returned.
@@ -60,20 +74,26 @@ void Socket::Disconnect(CriticalMap<UUID, Socket*> &critMap) {
             return Socket::DeleteOrDisconnect(this, critMap);
         }
     }
+    state = Socket::SocketState::DISCONNECTING;
+    LeaveCriticalSection(&SockCritSec);
     _cprintf("DisconnectEx ok\n");
 }
 
-void Socket::Close() {
+void Socket::Close(bool forceClose) {
     int err;
 
+    if (!forceClose) {
     // ----------------------------- shutdown connexion
-    if (shutdown(s, SD_SEND) == SOCKET_ERROR) {
-        err = WSAGetLastError();
-        _cprintf("Socket::Delete: shutdown failed / error %d\n", err);
-        if (err == WSAEINPROGRESS) {
-            LeaveCriticalSection(&SockCritSec);
-            return;
+        if (shutdown(s, SD_SEND) == SOCKET_ERROR) {
+            err = WSAGetLastError();
+            _cprintf("Socket::Delete: shutdown failed / error %d\n", err);
+            if (err == WSAEINPROGRESS) {
+                return;
+            }
+            forceClose = true;
         }
+    }
+    if (forceClose) {
         // ------------------------- change socket option to trigger abortive close
         linger sl = { 1,                                    //l_onoff : non-zero value enables linger option in kernel.
                       0 };                                  //l_linger : timeout interval in seconds.
@@ -92,9 +112,9 @@ void Socket::Close() {
         err = WSAGetLastError();
         _cprintf("Socket::Delete: closesocket failed / error %d\n", err);
         if (err == WSAEINPROGRESS) {
-            LeaveCriticalSection(&SockCritSec);
             return;
         }
     }
     s = INVALID_SOCKET;
+    state = CLOSED;
 }

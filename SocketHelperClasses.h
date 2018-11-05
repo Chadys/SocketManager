@@ -1,5 +1,5 @@
-#ifndef SOCKETCLIENT_SOCKETHELPERCLASSES_H
-#define SOCKETCLIENT_SOCKETHELPERCLASSES_H
+#ifndef SOCKETMANAGER_SOCKETHELPERCLASSES_H
+#define SOCKETMANAGER_SOCKETHELPERCLASSES_H
 
 #include <winsock2.h>
 #include <mswsock.h>
@@ -8,8 +8,9 @@
 #include <list>
 #include <unordered_map>
 #include "Misc.h"
+#include "SocketManager.h"
 
-class SocketClient;
+class SocketManager;
 
 /*********** CriticalContainers *********/                        // Practical class to gather up a container and its critical section
 class CriticalContainerWrapper{
@@ -98,11 +99,11 @@ public:
 
 /************* Socket ***********/
 class Socket : public ListElt<Socket> {     // Contains all needed information about one socket
-    friend class SocketClient;
+    friend class SocketManager;
     friend class ListElt;
 
 public:
-    Socket(CriticalList<Socket> &l, SocketClient *c, SOCKET s_, int af_)  : ListElt(l), id(), address(""), port(0),
+    Socket(CriticalList<Socket> &l, SocketManager *c, SOCKET s_, int af_) : ListElt(l), id(), address(""), port(0),
                                                                             s(s_), af(af_), state(SocketState::INIT),
                                                                             OutstandingRecv(0), OutstandingSend(0),
                                                                             SockCritSec{}, client(c), timeWaitStartTime(0) {
@@ -117,11 +118,16 @@ private:
         INIT,
         ASSOCIATED,
         BOUND,
+        DISCONNECTED,
+        LISTENING,
+        ACCEPTING,
         RETRY_CONNECTION,
         CONNECT_FAILURE,
         CONNECTED,
         CLOSING,
-        FAILURE
+        FAILURE,
+        DISCONNECTING,
+        CLOSED
     };
 
     UUID                        id;                     // Socket unique identifier (used to store it in a map
@@ -133,13 +139,13 @@ private:
     volatile LONG               OutstandingRecv,        // Number of outstanding overlapped ops on
                                 OutstandingSend;
     CRITICAL_SECTION            SockCritSec;            // Protect access to this structure
-    SocketClient*               client;                 // Pointer to containing class
+    SocketManager*              client;                 // Pointer to containing class
     DWORD                       timeWaitStartTime;      // Counter to test if socket has gotten out of TIME_WAIT state after a disconnect
 
     static void     Delete                  (Socket *obj);                                          // Close socket before deleting it
     static void     DeleteOrDisconnect      (Socket *obj, CriticalMap<UUID, Socket*> &critMap);     // Close socket before deleting it
     void            Disconnect              (CriticalMap<UUID, Socket*> &critMap);                  // Disconnect socket so it can be used again
-    void            Close                   ();                                                     // Permanently close connexion
+    void            Close                   (bool forceClose);                                                     // Permanently close connexion
 
 };
 ////////////// Socket ////////////
@@ -147,7 +153,7 @@ private:
 
 /************* Buffer ***********/
 class Buffer : public ListElt<Buffer> {     // Used as a read or write buffer for overlapped operations
-    friend class SocketClient;
+    friend class SocketManager;
     friend class Socket;
 
 private:
@@ -186,4 +192,4 @@ template class ListElt<Socket>;
 
 ////////////// Explicite Template Declaration ////////////
 
-#endif //SOCKETCLIENT_SOCKETHELPERCLASSES_H
+#endif //SOCKETMANAGER_SOCKETHELPERCLASSES_H

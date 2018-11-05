@@ -1,5 +1,5 @@
-#ifndef SOCKETCLIENT_MISC_H
-#define SOCKETCLIENT_MISC_H
+#ifndef SOCKETMANAGER_MISC_H
+#define SOCKETMANAGER_MISC_H
 
 #include <string>
 #include <windows.h>
@@ -7,6 +7,7 @@
 namespace Misc {
     int GetRegistryValue(const TCHAR *regSubKey, const TCHAR *regValue, std::basic_string<TCHAR> &valueFromRegistry);
     int GetRegistryValue(const TCHAR *regSubKey, const TCHAR *regValue, DWORD &valueFromRegistry);
+    inline UUID CreateNilUUID() { UUID nullId; UuidCreateNil(&nullId); return nullId; }
 }
 /************* StdExtention ***********/
 namespace std
@@ -27,11 +28,11 @@ namespace std
         bool operator () (const UUID& uid1, const UUID& uid2) const
         {
             RPC_STATUS status;
-            return UuidEqual (const_cast<UUID*>(&uid1), const_cast<UUID*>(&uid2), &status);
+            return static_cast<bool>(UuidEqual(const_cast<UUID*>(&uid1), const_cast<UUID*>(&uid2), &status));
         }
     };
 
 }
 ////////////// StdExtention ////////////
 
-#endif //SOCKETCLIENT_MISC_H
+#endif //SOCKETMANAGER_MISC_H
