@@ -6,7 +6,6 @@
 //TODO set default options (see chromium)
 //all SO_REUSE_UNICASTPORT
 //TODO check python windows implementation
-//TODO sendtoall function
 //TODO recycle socket and buffer object using splice (allocate big size on init ?)
 
 LPFN_CONNECTEX          SocketManager::ConnectEx             = nullptr;

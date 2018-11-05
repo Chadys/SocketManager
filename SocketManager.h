@@ -101,6 +101,7 @@ public:
     inline bool         isClientSocketReady (UUID socketId)                                         { Socket *sockObj = socketAccessMap.Get(socketId); return sockObj != nullptr && sockObj->state == Socket::SocketState::CONNECTED; };
     inline bool         isServerSocketReady (UUID socketId)                                         { Socket *sockObj = socketAccessMap.Get(socketId); return sockObj != nullptr && sockObj->state == Socket::SocketState::LISTENING; };
     inline void         SendData            (const char *data, u_long length, UUID socketId)        { return SendData(data, length, socketAccessMap.Get(socketId)); }
+    inline void         SendDataToAll       (const char *data, u_long length)                       { for (Socket& sock : inUseSocketList.list) SendData(data, length, &sock); }
     virtual int         ReceiveData         (const char* data, u_long length, Socket *socket);      // Do what needs to be done when receiving content from a socket //TODO make pure virtual
     /* Implementation recommendation :
      * Since a single read can be received by different threads,
