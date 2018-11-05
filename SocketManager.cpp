@@ -267,11 +267,6 @@ void SocketManager::HandleWrite(Socket *sockObj, Buffer *buf, DWORD bytesTransfe
 }
 
 void SocketManager::HandleConnection(Socket *sockObj, Buffer *buf) {
-    EnterCriticalSection(&sockObj->SockCritSec);
-    {
-        sockObj->state = Socket::SocketState::CONNECTED;
-    }
-    LeaveCriticalSection(&sockObj->SockCritSec);
     LOG("connected\n");
     int err = NO_ERROR;
     int option, optSize;
@@ -281,12 +276,19 @@ void SocketManager::HandleConnection(Socket *sockObj, Buffer *buf) {
         optSize = 0;
         optPtr = nullptr;
     } else {
+        Socket *listenSocketObj = sockObj;
+        sockObj = currentAcceptSocket;                    //sockObj is the listen socket and not the new communication socket
         option = SO_UPDATE_ACCEPT_CONTEXT;                //This option is used with the AcceptEx function. This option updates the properties of the socket which are inherited from the listening socket. This option should be set if the getpeername, getsockname, getsockopt, or setsockopt functions are to be used on the accepted socket.
-        optSize = sizeof(listenSocket->s);
-        optPtr = (char*)&listenSocket->s;
+        optSize = sizeof(listenSocketObj->s);
+        optPtr = (char*)&listenSocketObj->s;
         AddSocketToMap(sockObj, Misc::CreateNilUUID());
-        AcceptNewSocket();
+        AcceptNewSocket(listenSocketObj);
     }
+    EnterCriticalSection(&sockObj->SockCritSec);
+    {
+        sockObj->state = Socket::SocketState::CONNECTED;
+    }
+    LeaveCriticalSection(&sockObj->SockCritSec);
     // ----------------------------- set needed options
     if(setsockopt(sockObj->s,                             //s : A descriptor that identifies a socket.
                   SOL_SOCKET,                             //level : The level at which the option is defined
@@ -371,7 +373,7 @@ DWORD WINAPI SocketManager::IOCPWorkerThread(LPVOID lpParam) {
 }
 
 SocketManager::SocketManager(Type type_) : state(State::NOT_INITIALIZED), type(type_),
-                                           iocpHandle(INVALID_HANDLE_VALUE), listenSocket(nullptr) {
+                                           iocpHandle(INVALID_HANDLE_VALUE), currentAcceptSocket(nullptr) {
     int         res;
 
     // ----------------------------- start WSA
@@ -604,7 +606,7 @@ UUID SocketManager::ConnectToNewSocket(const char *address, u_short port, UUID i
     return sockObj->id;
 }
 
-bool SocketManager::AcceptNewSocket(){
+bool SocketManager::AcceptNewSocket(Socket *listenSockObj){
     int err;
     Socket *acceptSockObj = GenerateSocket(true);
     if (acceptSockObj == nullptr){
@@ -613,9 +615,10 @@ bool SocketManager::AcceptNewSocket(){
     if (!AssociateSocketToIOCP(acceptSockObj)){
         return false;
     }
+    currentAcceptSocket = acceptSockObj;
 
     Buffer *acceptobj = Buffer::Create(inUseBufferList, Buffer::Operation::Accept);
-    if (!AcceptEx(listenSocket->s,              //sListenSocket : A descriptor identifying a socket that has already been called with the listen function. A server application waits for attempts to connect on this socket.
+    if (!AcceptEx(listenSockObj->s,             //sListenSocket : A descriptor identifying a socket that has already been called with the listen function. A server application waits for attempts to connect on this socket.
                   acceptSockObj->s,             //sAcceptSocket : A descriptor identifying a socket on which to accept an incoming connection. This socket must not be bound or connected.
                   acceptobj->buf,               //lpOutputBuffer : A pointer to a buffer that receives the first block of data sent on a new connection, the local address of the server, and the remote address of the client. The receive data is written to the first part of the buffer starting at offset zero, while the addresses are written to the latter part of the buffer. This parameter must be specified.
                   0,                            //dwReceiveDataLength : The number of bytes in lpOutputBuffer that will be used for actual receive data at the beginning of the buffer. This size should not include the size of the local address of the server, nor the remote address of the client; they are appended to the output buffer. If dwReceiveDataLength is zero, accepting the connection will not result in a receive operation. Instead, AcceptEx completes as soon as a connection arrives, without waiting for any data.
@@ -646,7 +649,6 @@ UUID SocketManager::ListenToNewSocket(u_short port, bool fewCLientsExpected) {
     if (listenSockObj == nullptr){
         return nullId;
     }
-    SOCKET listenSock = listenSockObj->s;
     listenSockObj->port = port;
     LOG("GetSocketObj ok\n");
 
@@ -671,7 +673,7 @@ UUID SocketManager::ListenToNewSocket(u_short port, bool fewCLientsExpected) {
         return nullId;
     }
     // ----------------------------- listen
-    if (listen(listenSock,                              //s : A descriptor identifying a bound, unconnected socket.
+    if (listen(listenSockObj->s,                        //s : A descriptor identifying a bound, unconnected socket.
                fewCLientsExpected ? 5 : SOMAXCONN       //backlog : The maximum length of the queue of pending connections. If set to SOMAXCONN, the underlying service provider responsible for socket s will set the backlog to a maximum reasonable value.
     ) == SOCKET_ERROR){
         LOG("listen failed / error %d\n", WSAGetLastError());
@@ -680,11 +682,10 @@ UUID SocketManager::ListenToNewSocket(u_short port, bool fewCLientsExpected) {
     }
     LOG("bind ok\n");
     listenSockObj->state = Socket::SocketState::LISTENING;
-    listenSocket = listenSockObj;
 
     // ----------------------------- start accepting sockets
 
-    if (!AcceptNewSocket()){
+    if (!AcceptNewSocket(listenSockObj)){
         Socket::Delete(listenSockObj);
         return nullId;
     }

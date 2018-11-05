@@ -10,11 +10,22 @@ int main(int argc, char *argv[]){
     RPC_STATUS      status;
 
     if(manager.isReady()) {
-        socketId = isServer ? manager.ListenToNewSocket(port) : manager.ConnectToNewSocket(address, port);
-        if (!UuidIsNil(&socketId, &status)) {
-            for (;;) {
-                if (!manager.isSocketReady(socketId)) {
-                    socketId = isServer ? manager.ListenToNewSocket(port) : manager.ConnectToNewSocket(address, port);
+        if (isServer) {
+            socketId = manager.ListenToNewSocket(port);
+            if (!UuidIsNil(&socketId, &status)) {
+                for (;;) {
+                    if (!manager.isServerSocketReady(socketId)) {
+                        socketId = manager.ListenToNewSocket(port);
+                    }
+                }
+            }
+        } else {
+            socketId = manager.ConnectToNewSocket(address, port);
+            if (!UuidIsNil(&socketId, &status)) {
+                for (;;) {
+                    if (!manager.isClientSocketReady(socketId)) {
+                        socketId = manager.ConnectToNewSocket(address, port);
+                    }
                 }
             }
         }

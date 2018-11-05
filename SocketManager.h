@@ -56,7 +56,7 @@ private:
     CriticalList<Buffer>        inUseBufferList;            // All buffers currently used in an overlapped operation
     CriticalList<Socket>        inUseSocketList;            // All sockets this instance is currently connected to
     CriticalList<Socket*>       reusableSocketList;         // All sockets previously disconnected that can be recycled //TODO use a queue instead
-    Socket*                     listenSocket;               // Listen socket if manager is in server mode
+    Socket*                     currentAcceptSocket;        // Last accept socket if manager is in server mode (because event is raised in the listen socket
     CriticalMap<UUID, Socket*>  socketAccessMap;            // Only way to access a socket pointer from outside of this class, to prevent invalid memory access
 
     State                       state;                      // Current state of this instance, used for cleanup and to test readiness
@@ -90,7 +90,7 @@ private:
     bool                AssociateSocketToIOCP   (Socket *sockObj);                                      // Associate socket to IOCP, delete it if failure
     bool                BindSocket              (Socket *sockObj, SOCKADDR_IN sockAddr);                // Bind socket to given address, delete it if failure
     void                AddSocketToMap          (Socket *sockObj, UUID id);                             // Give unique id to socket and add it to access map
-    bool                AcceptNewSocket         ();                                                     // Create a new socket waiting to accept new connection
+    bool                AcceptNewSocket         (Socket *listenSockObj);                                // Create a new socket waiting to accept new connection
 
 public:
     explicit            SocketManager       (Type type_);
@@ -98,7 +98,8 @@ public:
     UUID                ListenToNewSocket   (u_short port, bool fewCLientsExpected = false);        // Start listening to new connection event on this socket and handle those connection in new sockets
     inline UUID         ConnectToNewSocket  (const char *address, u_short port)                     { return ConnectToNewSocket(address, port, Misc::CreateNilUUID()); }
     inline bool         isReady             () const                                                { return state == State::READY; };
-    inline bool         isSocketReady       (UUID socketId)                                         { Socket *sockObj = socketAccessMap.Get(socketId); return sockObj != nullptr && sockObj->state == Socket::SocketState::CONNECTED; };
+    inline bool         isClientSocketReady (UUID socketId)                                         { Socket *sockObj = socketAccessMap.Get(socketId); return sockObj != nullptr && sockObj->state == Socket::SocketState::CONNECTED; };
+    inline bool         isServerSocketReady (UUID socketId)                                         { Socket *sockObj = socketAccessMap.Get(socketId); return sockObj != nullptr && sockObj->state == Socket::SocketState::LISTENING; };
     inline void         SendData            (const char *data, u_long length, UUID socketId)        { return SendData(data, length, socketAccessMap.Get(socketId)); }
     virtual int         ReceiveData         (const char* data, u_long length, Socket *socket);      // Do what needs to be done when receiving content from a socket //TODO make pure virtual
     /* Implementation recommendation :
