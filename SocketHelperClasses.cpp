@@ -6,7 +6,7 @@ void Socket::Delete(Socket *obj) {
     {
         // Close the socket if it hasn't already been closed
         if (obj->s != INVALID_SOCKET && (obj->state == CONNECTED || obj->state == FAILURE)) {
-            _cprintf("Socket::Delete: closing socket\n");
+            LOG("closing socket\n");
             obj->Close(obj->state == FAILURE);
         }
     }
@@ -24,20 +24,20 @@ void Socket::DeleteOrDisconnect(Socket *obj, CriticalMap<UUID, Socket*> &critMap
             switch (obj->state){
                 case CLOSING : {
                     if (obj->client->ShouldReuseSocket()) {
-                        _cprintf("Socket::Delete: disconnecting socket\n");
+                        LOG("disconnecting socket\n");
                         obj->Disconnect(critMap);
                         return;
                     }
                     /** NOBREAK **/
                 }
                 case CONNECTED :{
-                    _cprintf("Socket::Delete: closing socket\n");
+                    LOG("closing socket\n");
                     obj->Close(false);
                     break;
                 }
                 case FAILURE : /** NOBREAK **/
                 case LISTENING :{
-                    _cprintf("Socket::Delete: closing socket\n");
+                    LOG("closing socket\n");
                     obj->Close(true);
                     break;
                 }
@@ -68,7 +68,7 @@ void Socket::Disconnect(CriticalMap<UUID, Socket*> &critMap) {
                                     0                            // reserved : Reserved. Must be zero. If nonzero, WSAEINVAL is returned.
     )) {
         if ((err = WSAGetLastError()) != WSA_IO_PENDING) {
-            _cprintf("Socket::Delete: DisconnectEx failed: %d\n", err);
+            LOG("DisconnectEx failed: %d\n", err);
             state = Socket::SocketState::FAILURE;
             LeaveCriticalSection(&SockCritSec);
             return Socket::DeleteOrDisconnect(this, critMap);
@@ -76,7 +76,7 @@ void Socket::Disconnect(CriticalMap<UUID, Socket*> &critMap) {
     }
     state = Socket::SocketState::DISCONNECTING;
     LeaveCriticalSection(&SockCritSec);
-    _cprintf("DisconnectEx ok\n");
+    LOG("DisconnectEx ok\n");
 }
 
 void Socket::Close(bool forceClose) {
@@ -86,7 +86,7 @@ void Socket::Close(bool forceClose) {
     // ----------------------------- shutdown connexion
         if (shutdown(s, SD_SEND) == SOCKET_ERROR) {
             err = WSAGetLastError();
-            _cprintf("Socket::Delete: shutdown failed / error %d\n", err);
+            LOG("shutdown failed / error %d\n", err);
             if (err == WSAEINPROGRESS) {
                 return;
             }
@@ -104,13 +104,13 @@ void Socket::Close(bool forceClose) {
                        sizeof(sl)                           //optlen : The size, in bytes, of the buffer pointed to by the optval parameter.
         ) == SOCKET_ERROR ) {
             err = WSAGetLastError();
-            _cprintf("Socket::Delete: setsockopt failed / error %d\n", err);
+            LOG("setsockopt failed / error %d\n", err);
         }
     }
     // ----------------------------- graceful or abortive close depending on if shutdown failed
     if (closesocket(s) == SOCKET_ERROR) {
         err = WSAGetLastError();
-        _cprintf("Socket::Delete: closesocket failed / error %d\n", err);
+        LOG("closesocket failed / error %d\n", err);
         if (err == WSAEINPROGRESS) {
             return;
         }

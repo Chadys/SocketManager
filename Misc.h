@@ -4,6 +4,8 @@
 #include <string>
 #include <windows.h>
 
+#define LOG(text...) setbuf(stdout, 0); printf("%s : ", __func__); printf(text);
+
 namespace Misc {
     int GetRegistryValue(const TCHAR *regSubKey, const TCHAR *regValue, std::basic_string<TCHAR> &valueFromRegistry);
     int GetRegistryValue(const TCHAR *regSubKey, const TCHAR *regValue, DWORD &valueFromRegistry);

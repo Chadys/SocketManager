@@ -6,7 +6,6 @@
 //TODO set default options (see chromium)
 //all SO_REUSE_UNICASTPORT
 //TODO check python windows implementation
-//TODO _cprintf use __FUNC__
 //TODO sendtoall function
 //TODO recycle socket and buffer object using splice (allocate big size on init ?)
 
@@ -19,7 +18,7 @@ DWORD                   SocketManager::TimeWaitValue         = 0;
 
 
 int SocketManager::ReceiveData(const char *data, u_long length, Socket *socket) {
-    _cprintf("receive bytes : %.*s\n", length, data);
+    LOG("receive bytes : %.*s\n", length, data);
     if(length == 5 && strncmp(data, "ping\n", 5) == 0)
         SendData("pong", 4, socket);
     else if(length == 5 && strncmp(data, "quit\n", 5) == 0) {
@@ -35,7 +34,7 @@ int SocketManager::ReceiveData(const char *data, u_long length, Socket *socket) 
 void SocketManager::SendData(const char *data, u_long length, Socket *socket) {
     if (socket == nullptr || socket->state != Socket::SocketState::CONNECTED)
         return;
-    _cprintf("send %s\n", data);
+    LOG("send %s\n", data);
 
     while(length > 0){
         Buffer *sendobj = Buffer::Create(inUseBufferList, Buffer::Operation::Write);
@@ -78,7 +77,7 @@ int SocketManager::PostRecv(Socket *sock, Buffer *recvobj) {
         if (rc == SOCKET_ERROR) {
             rc = NO_ERROR;
             if ((err = WSAGetLastError()) != WSA_IO_PENDING) {
-                _cprintf("PostRecv: WSARecv* failed: %d\n", err);
+                LOG("WSARecv* failed: %d\n", err);
                 rc = SOCKET_ERROR;
             }
         }
@@ -111,7 +110,7 @@ int SocketManager::PostSend(Socket *sock, Buffer *sendobj) {
         if (rc == SOCKET_ERROR) {
             rc = NO_ERROR;
             if ((err = WSAGetLastError()) != WSA_IO_PENDING) {
-                _cprintf("PostSend: WSASend* failed: %d [internal = %d]\n", err, sendobj->ol.Internal);
+                LOG("WSASend* failed: %d [internal = %d]\n", err, sendobj->ol.Internal);
                 rc = SOCKET_ERROR;
             }
         }
@@ -126,7 +125,7 @@ int SocketManager::PostSend(Socket *sock, Buffer *sendobj) {
 void SocketManager::HandleError(Socket *sockobj, Buffer *buf, DWORD error) {
     bool    cleanupSocket   = false;
 
-    _cprintf("Handle error OP = %d; Error = %d\n", buf->operation, error);
+    LOG("Handle error OP = %d; Error = %d\n", buf->operation, error);
 
     EnterCriticalSection(&sockobj->SockCritSec);
     {
@@ -159,7 +158,7 @@ void SocketManager::HandleError(Socket *sockobj, Buffer *buf, DWORD error) {
             }
         }
         if (sockobj->OutstandingRecv == 0 && sockobj->OutstandingSend == 0) {
-            _cprintf("Freeing socket obj in HandleError\n");
+            LOG("Freeing socket obj in HandleError\n");
             cleanupSocket = true;
         }
     }
@@ -192,7 +191,7 @@ void SocketManager::HandleIo(Socket *sockObj, Buffer *buf, DWORD bytesTransfered
             break;
         }
         default:
-            _cprintf("op ?");
+            LOG("op ?");
     }
 
     // If this was the last outstanding operation on closing socket, clean it up
@@ -215,7 +214,7 @@ void SocketManager::HandleRead(Socket *sockObj, Buffer *buf, DWORD bytesTransfer
         sockObj->OutstandingRecv--;
     }
     LeaveCriticalSection(&sockObj->SockCritSec);
-    _cprintf("read\n");
+    LOG("read\n");
 
     // Receive completed successfully
     if (bytesTransfered > 0) {
@@ -225,7 +224,7 @@ void SocketManager::HandleRead(Socket *sockObj, Buffer *buf, DWORD bytesTransfer
         if (sockObj->state != Socket::SocketState::CONNECTED)
             Buffer::Delete(buf);
         else if(PostRecv(sockObj, buf) == SOCKET_ERROR) {
-            _cprintf("HandleIo: PostRecv failed!\n");
+            LOG("PostRecv failed!\n");
             EnterCriticalSection(&sockObj->SockCritSec);
             {
                 sockObj->state = Socket::SocketState::FAILURE;
@@ -235,7 +234,7 @@ void SocketManager::HandleRead(Socket *sockObj, Buffer *buf, DWORD bytesTransfer
         }
     }
     else {
-        _cprintf("Received 0 byte\n");
+        LOG("Received 0 byte\n");
         // Graceful close - the receive returned 0 bytes read
         EnterCriticalSection(&sockObj->SockCritSec);
         {
@@ -248,7 +247,7 @@ void SocketManager::HandleRead(Socket *sockObj, Buffer *buf, DWORD bytesTransfer
 }
 
 void SocketManager::HandleWrite(Socket *sockObj, Buffer *buf, DWORD bytesTransfered) {
-    _cprintf("write\n");
+    LOG("write\n");
 
     // Update the counters
     EnterCriticalSection(&sockObj->SockCritSec);
@@ -273,7 +272,7 @@ void SocketManager::HandleConnection(Socket *sockObj, Buffer *buf) {
         sockObj->state = Socket::SocketState::CONNECTED;
     }
     LeaveCriticalSection(&sockObj->SockCritSec);
-    _cprintf("connected\n");
+    LOG("connected\n");
     int err = NO_ERROR;
     int option, optSize;
     char *optPtr;
@@ -296,13 +295,13 @@ void SocketManager::HandleConnection(Socket *sockObj, Buffer *buf) {
                   optSize                                 //optlen : The size, in bytes, of the buffer pointed to by the optval parameter.
                   ) == SOCKET_ERROR){ //shouldn't ever happens
         err = WSAGetLastError();
-        _cprintf("HandleIo: setsockopt failed : %d\n", err);
+        LOG("setsockopt failed : %d\n", err);
     }
     // ----------------------------- trigger first recv
     buf->operation = Buffer::Operation::Read;
     if(PostRecv(sockObj, buf) == SOCKET_ERROR){
         err = SOCKET_ERROR;
-        _cprintf("HandleIo: PostRecv failed!\n");
+        LOG("PostRecv failed!\n");
     }
     if (err != NO_ERROR){
         EnterCriticalSection(&sockObj->SockCritSec);
@@ -326,7 +325,7 @@ void SocketManager::HandleDisconnect(Socket *sockObj, Buffer *buf) {
         reusableSocketList.list.push_back(sockObj);
     }
     LeaveCriticalSection(&reusableSocketList.critSec);
-    _cprintf("disconnected\n");
+    LOG("disconnected\n");
     Buffer::Delete(buf);
 }
 
@@ -350,7 +349,7 @@ DWORD WINAPI SocketManager::IOCPWorkerThread(LPVOID lpParam) {
         buffer = CONTAINING_RECORD(lpOverlapped, Buffer, ol);
         if (rc == FALSE) {
             error = GetLastError();
-            _cprintf("CompletionThread: GetQueuedCompletionStatus failed for operation %d : %d\n", buffer->operation, error);
+            LOG("GetQueuedCompletionStatus failed for operation %d : %d\n", buffer->operation, error);
 
             if(socket != nullptr) {
                 rc = WSAGetOverlappedResult(socket->s, &buffer->ol, &BytesTransfered, FALSE, &Flags);
@@ -367,7 +366,7 @@ DWORD WINAPI SocketManager::IOCPWorkerThread(LPVOID lpParam) {
             socket->client->HandleIo(socket, buffer, BytesTransfered);
     }
 
-    _cprintf("exit thread");
+    LOG("exit thread");
     return NO_ERROR;
 }
 
@@ -382,10 +381,10 @@ SocketManager::SocketManager(Type type_) : state(State::NOT_INITIALIZED), type(t
     // load Winsock 2.2 DLL. initiates use of the Winsock DLL by a process
     if ((res = WSAStartup(MAKEWORD(2, 2), &wsaData)) != NO_ERROR) {
         //WSASYSNOTREADY, WSAVERNOTSUPPORTED, WSAEINPROGRESS, WSAEPROCLIM, WSAEFAULT
-        _cprintf("WSAStartup failed / error %d\n", res);
+        LOG("WSAStartup failed / error %d\n", res);
         return;
     }
-    _cprintf("WSAStartup ok\n");
+    LOG("WSAStartup ok\n");
     state = State::WSA_INITIALIZED;
 
     // ----------------------------- set up IOCP
@@ -395,10 +394,10 @@ SocketManager::SocketManager(Type type_) : state(State::NOT_INITIALIZED), type(t
                                              0,                      //CompletionKey[in] : The per-handle user-defined completion key that is included in every I/O completion packet for the specified file handle. (ignored)
                                              0                       //NumberOfConcurrentThreads[in] : The maximum number of threads that the operating system can allow to concurrently process I/O completion packets for the I/O completion port. If this parameter is zero, the system allows as many concurrently running threads as there are processors in the system.
                                             )) == nullptr) {
-        _cprintf("CreateIoCompletionPort failed / error %d\n", GetLastError());
+        LOG("CreateIoCompletionPort failed / error %d\n", GetLastError());
         return;
     }
-    _cprintf("CreateIoCompletionPort ok\n");
+    LOG("CreateIoCompletionPort ok\n");
     state = State::IOCP_INITIALIZED;
 
     // count processors
@@ -419,11 +418,11 @@ SocketManager::SocketManager(Type type_) : state(State::NOT_INITIALIZED), type(t
                                          0,                       // use default creation flags
                                          &ThreadID                // thread identifier
                                         )) == nullptr) {
-            _cprintf("CreateThread failed / error %d\n", GetLastError());
+            LOG("CreateThread failed / error %d\n", GetLastError());
             ClearThreads();
             return;
         }
-        _cprintf("CreateThread %d ok\n", ThreadID);
+        LOG("CreateThread %d ok\n", ThreadID);
         threadHandles.push_back(ThreadHandle);
     }
     state = State::THREADS_INITIALIZED;
@@ -448,7 +447,7 @@ SocketManager::~SocketManager() {
     if(state >= State::WSA_INITIALIZED){
         if(WSACleanup() == SOCKET_ERROR){
             //WSANOTINITIALISED, WSAENETDOWN, WSAEINPROGRESS
-            _cprintf("WSACleanup failed / error %d\n", WSAGetLastError());
+            LOG("WSACleanup failed / error %d\n", WSAGetLastError());
         }
     }
 }
@@ -487,10 +486,10 @@ Socket *SocketManager::GenerateSocket(bool reuse){
                               0,                           //g : An existing socket group ID or an appropriate action to take when creating a new socket and a new socket group. 0 -> No group operation is performed.
                               WSA_FLAG_OVERLAPPED          //dwFlags : A set of flags used to specify additional socket attributes. WSA_FLAG_OVERLAPPED -> Create a socket that supports overlapped I/O operations.
         )) == INVALID_SOCKET) {
-            _cprintf("WSASocket failed / error %d\n", WSAGetLastError());
+            LOG("WSASocket failed / error %d\n", WSAGetLastError());
             return nullptr;
         }
-        _cprintf("WSASocket ok\n");
+        LOG("WSASocket ok\n");
         const int fam = FAMILY;
         sockObj = Socket::Create(inUseSocketList, this, sock, fam); //can't use FAMILY directly else undefined reference to `SocketManager::FAMILY' STRANGEST ERROR EVER, compiler bug ?
     }
@@ -503,11 +502,11 @@ bool SocketManager::AssociateSocketToIOCP(Socket *sockObj){
                                         (ULONG_PTR)sockObj,          //CompletionKey[in] : The per-handle user-defined completion key that is included in every I/O completion packet for the specified file handle.
                                         0);                          //NumberOfConcurrentThreads[in] : This parameter is ignored if the ExistingCompletionPort parameter is not NULL.
     if (hrc == nullptr) {
-        _cprintf("CreateIoCompletionPort failed / error %d\n", GetLastError());
+        LOG("CreateIoCompletionPort failed / error %d\n", GetLastError());
         Socket::Delete(sockObj);
         return false;
     }
-    _cprintf("CreateIoCompletionPort ok\n");
+    LOG("CreateIoCompletionPort ok\n");
     sockObj->state = Socket::SocketState::ASSOCIATED;
     return true;
 }
@@ -517,11 +516,11 @@ bool SocketManager::BindSocket(Socket *sockObj, SOCKADDR_IN sockAddr){
              (SOCKADDR*)(&sockAddr),            //name : A pointer to a sockaddr structure that specifies the address to which to connect. For IPv4, the sockaddr contains AF_INET for the address family, the destination IPv4 address, and the destination port.
              sizeof(sockAddr)                   //namelen : The length, in bytes, of the sockaddr structure pointed to by the name parameter.
     ) == SOCKET_ERROR){
-        _cprintf("bind failed / error %d\n", WSAGetLastError());
+        LOG("bind failed / error %d\n", WSAGetLastError());
         Socket::Delete(sockObj);
         return false;
     }
-    _cprintf("bind ok\n");
+    LOG("bind ok\n");
     sockObj->state = Socket::SocketState::BOUND;
     return true;
 }
@@ -556,7 +555,7 @@ UUID SocketManager::ConnectToNewSocket(const char *address, u_short port, UUID i
     SOCKET sock = sockObj->s;
     sockObj->address = address;
     sockObj->port = port;
-    _cprintf("GetSocketObj ok\n");
+    LOG("GetSocketObj ok\n");
 
     SOCKADDR_IN sockAddr;
     ZeroMemory(&sockAddr, sizeof(SOCKADDR_IN));
@@ -580,7 +579,7 @@ UUID SocketManager::ConnectToNewSocket(const char *address, u_short port, UUID i
     sockAddr.sin_addr.s_addr = inet_addr(address);
     if(WSAHtons(sockObj->s, port, &sockAddr.sin_port) == SOCKET_ERROR) { // host-to-network-short: big-endian conversion of a 16 byte value
         //WSANOTINITIALISED, WSAENETDOWN, WSAENOTSOCK, WSAEFAULT
-        _cprintf("WSAHtonl failed / error %d\n", GetLastError());
+        LOG("WSAHtonl failed / error %d\n", GetLastError());
         Socket::Delete(sockObj);
         return nullId;
     }
@@ -595,12 +594,12 @@ UUID SocketManager::ConnectToNewSocket(const char *address, u_short port, UUID i
                    &(connectobj->ol)            //lpOverlapped : An OVERLAPPED structure used to process the request. The lpOverlapped parameter must be specified, and cannot be NULL.
                   )) {
         if ((err = WSAGetLastError()) != WSA_IO_PENDING) {
-            _cprintf("ConnectToNewSocket: ConnectEx failed: %d\n", err);
+            LOG("ConnectToNewSocket: ConnectEx failed: %d\n", err);
             Socket::Delete(sockObj);
             return nullId; // connect error
         }
     }
-    _cprintf("ConnectEx ok\n");
+    LOG("ConnectEx ok\n");
     AddSocketToMap(sockObj, id);
     return sockObj->id;
 }
@@ -626,12 +625,12 @@ bool SocketManager::AcceptNewSocket(){
                   &(acceptobj->ol)              //lpOverlapped : An OVERLAPPED structure used to process the request. The lpOverlapped parameter must be specified, and cannot be NULL.
     )) {
         if ((err = WSAGetLastError()) != WSA_IO_PENDING) {
-            _cprintf("ConnectToNewSocket: ConnectEx failed: %d\n", err);
+            LOG("ConnectEx failed: %d\n", err);
             Socket::Delete(acceptSockObj);
             return false; // connect error
         }
     }
-    _cprintf("AcceptEx ok\n");
+    LOG("AcceptEx ok\n");
     acceptSockObj->state = Socket::SocketState::ACCEPTING;
     return true;
 }
@@ -649,7 +648,7 @@ UUID SocketManager::ListenToNewSocket(u_short port, bool fewCLientsExpected) {
     }
     SOCKET listenSock = listenSockObj->s;
     listenSockObj->port = port;
-    _cprintf("GetSocketObj ok\n");
+    LOG("GetSocketObj ok\n");
 
     SOCKADDR_IN sockAddr;
     ZeroMemory(&sockAddr, sizeof(SOCKADDR_IN));
@@ -657,7 +656,7 @@ UUID SocketManager::ListenToNewSocket(u_short port, bool fewCLientsExpected) {
     sockAddr.sin_addr.s_addr = INADDR_ANY;
     if(WSAHtons(listenSockObj->s, port, &sockAddr.sin_port) == SOCKET_ERROR) { // host-to-network-short: big-endian conversion of a 16 byte value
         //WSANOTINITIALISED, WSAENETDOWN, WSAENOTSOCK, WSAEFAULT
-        _cprintf("WSAHtonl failed / error %d\n", GetLastError());
+        LOG("WSAHtonl failed / error %d\n", GetLastError());
         Socket::Delete(listenSockObj);
         return nullId;
     }
@@ -675,11 +674,11 @@ UUID SocketManager::ListenToNewSocket(u_short port, bool fewCLientsExpected) {
     if (listen(listenSock,                              //s : A descriptor identifying a bound, unconnected socket.
                fewCLientsExpected ? 5 : SOMAXCONN       //backlog : The maximum length of the queue of pending connections. If set to SOMAXCONN, the underlying service provider responsible for socket s will set the backlog to a maximum reasonable value.
     ) == SOCKET_ERROR){
-        _cprintf("listen failed / error %d\n", WSAGetLastError());
+        LOG("listen failed / error %d\n", WSAGetLastError());
         Socket::Delete(listenSockObj);
         return nullId;
     }
-    _cprintf("bind ok\n");
+    LOG("bind ok\n");
     listenSockObj->state = Socket::SocketState::LISTENING;
     listenSocket = listenSockObj;
 
@@ -703,7 +702,7 @@ bool SocketManager::InitAsyncSocketFuncs() {
                             0,                           //g : An existing socket group ID or an appropriate action to take when creating a new socket and a new socket group. 0 -> No group operation is performed.
                             0);                          //dwFlags : A set of flags used to specify additional socket attributes.
     if (sock == INVALID_SOCKET) {
-        _cprintf("WSASocket failed / error %d\n", WSAGetLastError());
+        LOG("WSASocket failed / error %d\n", WSAGetLastError());
         return false;
     }
     return InitAsyncSocketFunc(sock, WSAID_CONNECTEX, &ConnectEx, sizeof(ConnectEx)) &&
@@ -723,7 +722,7 @@ bool SocketManager::InitAsyncSocketFunc(SOCKET sock, GUID guid, LPVOID func, DWO
                  nullptr,                                //lpOverlapped : A pointer to a WSAOVERLAPPED structure (ignored for non-overlapped sockets).
                  nullptr                                 //lpCompletionRoutine : A pointer to the completion routine called when the operation has been completed (ignored for non-overlapped sockets).
                 ) != 0) {
-        _cprintf("WSAIoctl failed / error %d\n", WSAGetLastError());
+        LOG("WSAIoctl failed / error %d\n", WSAGetLastError());
         return false;
     }
     return true;
@@ -760,7 +759,7 @@ Socket *SocketManager::ReuseSocket() {
             sockObj = reusableSocketList.list.front();
             DWORD currentTime = GetTickCount();
             if(currentTime - sockObj->timeWaitStartTime > TimeWaitValue) {
-                _cprintf("Recycling socket\n");
+                LOG("Recycling socket\n");
                 sockObj->timeWaitStartTime = 0;
                 reusableSocketList.list.pop_front();
             } else {
