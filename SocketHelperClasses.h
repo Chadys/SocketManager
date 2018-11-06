@@ -6,6 +6,7 @@
 #include <windows.h>
 #include <conio.h>
 #include <list>
+#include <queue>
 #include <unordered_map>
 #include "Misc.h"
 #include "SocketManager.h"
@@ -24,8 +25,14 @@ template<typename T>
 class CriticalList : public CriticalContainerWrapper {
 public:
     std::list<T>                list;
-
 };
+
+template<typename T>
+class CriticalQueue : public CriticalContainerWrapper {
+public:
+    std::queue<T>                queue;
+};
+
 template<typename T, typename U>
 class CriticalMap : public CriticalContainerWrapper {
 

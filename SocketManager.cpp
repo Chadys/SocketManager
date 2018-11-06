@@ -321,11 +321,11 @@ void SocketManager::HandleDisconnect(Socket *sockObj, Buffer *buf) {
         sockObj->timeWaitStartTime = GetTickCount();
     }
     LeaveCriticalSection(&sockObj->SockCritSec);
-    EnterCriticalSection(&reusableSocketList.critSec);
+    EnterCriticalSection(&reusableSocketQueue.critSec);
     {
-        reusableSocketList.list.push_back(sockObj);
+        reusableSocketQueue.queue.push(sockObj);
     }
-    LeaveCriticalSection(&reusableSocketList.critSec);
+    LeaveCriticalSection(&reusableSocketQueue.critSec);
     LOG("disconnected\n");
     Buffer::Delete(buf);
 }
@@ -753,30 +753,30 @@ void SocketManager::InitTimeWaitValue() {
 
 Socket *SocketManager::ReuseSocket() {
     Socket *sockObj = nullptr;
-    EnterCriticalSection(&reusableSocketList.critSec);
+    EnterCriticalSection(&reusableSocketQueue.critSec);
     {
-        if (!reusableSocketList.list.empty()){
-            sockObj = reusableSocketList.list.front();
+        if (!reusableSocketQueue.queue.empty()){
+            sockObj = reusableSocketQueue.queue.front();
             DWORD currentTime = GetTickCount();
             if(currentTime - sockObj->timeWaitStartTime > TimeWaitValue) {
                 LOG("Recycling socket\n");
                 sockObj->timeWaitStartTime = 0;
-                reusableSocketList.list.pop_front();
+                reusableSocketQueue.queue.pop();
             } else {
                 sockObj = nullptr;
             }
         }
     }
-    LeaveCriticalSection(&reusableSocketList.critSec);
+    LeaveCriticalSection(&reusableSocketQueue.critSec);
     return sockObj;
 }
 
 bool SocketManager::ShouldReuseSocket() {
     bool reuse;
-    EnterCriticalSection(&reusableSocketList.critSec);
+    EnterCriticalSection(&reusableSocketQueue.critSec);
     {
-        reuse = reusableSocketList.list.size() < MAX_UNUSED_SOCKET;
+        reuse = reusableSocketQueue.queue.size() < MAX_UNUSED_SOCKET;
     }
-    LeaveCriticalSection(&reusableSocketList.critSec);
+    LeaveCriticalSection(&reusableSocketQueue.critSec);
     return reuse;
 }
