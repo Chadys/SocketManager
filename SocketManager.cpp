@@ -263,7 +263,7 @@ void SocketManager::HandleWrite(Socket *sockObj, Buffer *buf, DWORD bytesTransfe
 
 void SocketManager::HandleConnection(Socket *sockObj, Buffer *buf) {
     LOG("connected\n");
-    int err = NO_ERROR;
+    int err;
     int option, optSize;
     char *optPtr;
     if (buf->operation == Buffer::Operation::Connect){
@@ -501,7 +501,8 @@ bool SocketManager::AssociateSocketToIOCP(Socket *sockObj){
 }
 
 bool SocketManager::BindSocket(Socket *sockObj, SOCKADDR_IN sockAddr){
-    if (SetSocketOption(sockObj->s, SO_EXCLUSIVEADDRUSE | SO_REUSE_UNICASTPORT, true) == SOCKET_ERROR) //works on Windows 10 only, use SO_PORT_SCALABILITY instead on Windows 7-8
+    if (SetSocketOption(sockObj->s, SO_REUSE_UNICASTPORT, true) == SOCKET_ERROR || //works on Windows 10 only, use SO_PORT_SCALABILITY instead on Windows 7-8
+        SetSocketOption(sockObj->s, SO_EXCLUSIVEADDRUSE, true) == SOCKET_ERROR)
         return false;
     if (bind(sockObj->s,                        //s : A descriptor identifying an unconnected socket.
              (SOCKADDR*)(&sockAddr),            //name : A pointer to a sockaddr structure that specifies the address to which to connect. For IPv4, the sockaddr contains AF_INET for the address family, the destination IPv4 address, and the destination port.
