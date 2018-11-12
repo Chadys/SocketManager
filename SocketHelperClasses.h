@@ -11,6 +11,10 @@
 #include "Misc.h"
 #include "SocketManager.h"
 
+#ifndef SO_REUSE_UNICASTPORT //because ws2def.h of mingw64 is incomplete
+#define SO_REUSE_UNICASTPORT 0x3007
+#endif
+
 class SocketManager;
 
 /*********** CriticalContainers *********/                        // Practical class to gather up a container and its critical section

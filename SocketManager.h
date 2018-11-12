@@ -89,6 +89,8 @@ private:
     Socket *            GenerateSocket          (bool reuse);                                           // Generate a new socket object, reuse one if possible
     bool                AssociateSocketToIOCP   (Socket *sockObj);                                      // Associate socket to IOCP, delete it if failure
     bool                BindSocket              (Socket *sockObj, SOCKADDR_IN sockAddr);                // Bind socket to given address, delete it if failure
+    int                 SetSocketOption         (SOCKET s, int option, const char *optPtr, int optSize);// Set a socket option to a given value and return error status
+    inline int          SetSocketOption         (SOCKET s, int option, bool value)                      { return SetSocketOption(s, option, (const char*)&value, sizeof(value)); }
     void                AddSocketToMap          (Socket *sockObj, UUID id);                             // Give unique id to socket and add it to access map
     bool                AcceptNewSocket         (Socket *listenSockObj);                                // Create a new socket waiting to accept new connection
 

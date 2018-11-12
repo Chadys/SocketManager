@@ -3,9 +3,6 @@
 
 //TODO max send to avoid consuming all resources
 //TODO use SIO_IDEAL_SEND_BACKLOG_QUERY and SIO_IDEAL_SEND_BACKLOG_CHANGE
-//TODO set default options (see chromium)
-//all SO_REUSE_UNICASTPORT
-//TODO check python windows implementation
 
 LPFN_CONNECTEX          SocketManager::ConnectEx             = nullptr;
 LPFN_DISCONNECTEX       SocketManager::DisconnectEx          = nullptr;
@@ -288,15 +285,7 @@ void SocketManager::HandleConnection(Socket *sockObj, Buffer *buf) {
     }
     LeaveCriticalSection(&sockObj->SockCritSec);
     // ----------------------------- set needed options
-    if(setsockopt(sockObj->s,                             //s : A descriptor that identifies a socket.
-                  SOL_SOCKET,                             //level : The level at which the option is defined
-                  option,                                 //optname : The socket option for which the value is to be set. The optname parameter must be a socket option defined within the specified level, or behavior is undefined.
-                  optPtr,                                 //optval : A pointer to the buffer in which the value for the requested option is specified.
-                  optSize                                 //optlen : The size, in bytes, of the buffer pointed to by the optval parameter.
-                  ) == SOCKET_ERROR){ //shouldn't ever happens
-        err = WSAGetLastError();
-        LOG("setsockopt failed : %d\n", err);
-    }
+    err = SetSocketOption(sockObj->s, option, optPtr, optSize);
     // ----------------------------- trigger first recv
     buf->operation = Buffer::Operation::Read;
     if(PostRecv(sockObj, buf) == SOCKET_ERROR){
@@ -512,6 +501,8 @@ bool SocketManager::AssociateSocketToIOCP(Socket *sockObj){
 }
 
 bool SocketManager::BindSocket(Socket *sockObj, SOCKADDR_IN sockAddr){
+    if (SetSocketOption(sockObj->s, SO_EXCLUSIVEADDRUSE | SO_REUSE_UNICASTPORT, true) == SOCKET_ERROR) //works on Windows 10 only, use SO_PORT_SCALABILITY instead on Windows 7-8
+        return false;
     if (bind(sockObj->s,                        //s : A descriptor identifying an unconnected socket.
              (SOCKADDR*)(&sockAddr),            //name : A pointer to a sockaddr structure that specifies the address to which to connect. For IPv4, the sockaddr contains AF_INET for the address family, the destination IPv4 address, and the destination port.
              sizeof(sockAddr)                   //namelen : The length, in bytes, of the sockaddr structure pointed to by the name parameter.
@@ -523,6 +514,21 @@ bool SocketManager::BindSocket(Socket *sockObj, SOCKADDR_IN sockAddr){
     LOG("bind ok\n");
     sockObj->state = Socket::SocketState::BOUND;
     return true;
+}
+
+int SocketManager::SetSocketOption(SOCKET s, int option, const char *optPtr, int optSize){
+    int err = NO_ERROR;
+
+    if(setsockopt(s,                                      //s : A descriptor that identifies a socket.
+                  SOL_SOCKET,                             //level : The level at which the option is defined
+                  option,                                 //optname : The socket option for which the value is to be set. The optname parameter must be a socket option defined within the specified level, or behavior is undefined.
+                  optPtr,                                 //optval : A pointer to the buffer in which the value for the requested option is specified.
+                  optSize                                 //optlen : The size, in bytes, of the buffer pointed to by the optval parameter.
+    ) == SOCKET_ERROR){ //shouldn't ever happens
+        err = WSAGetLastError();
+        LOG("setsockopt for option %d failed : %d\n", option, err);
+    }
+    return err;
 }
 
 void SocketManager::AddSocketToMap(Socket *sockObj, UUID id){
