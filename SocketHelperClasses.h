@@ -157,6 +157,8 @@ public:
         SockCritSec = sock.SockCritSec;
         client = sock.client;
         timeWaitStartTime = sock.timeWaitStartTime;
+        critList = sock.critList;
+        it = sock.it;
         return *this;
     }
 
@@ -221,6 +223,8 @@ public:
 
     Buffer& operator=(const Buffer& buff){
         ol = buff.ol;
+        critList = buff.critList;
+        it = buff.it;
         return *this;
     }
 
