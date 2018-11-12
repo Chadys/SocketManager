@@ -53,16 +53,16 @@ private:
 
     /************************ Attributes **************************/
 
-    CriticalList<Buffer>        inUseBufferList;            // All buffers currently used in an overlapped operation
-    CriticalList<Socket>        inUseSocketList;            // All sockets this instance is currently connected to
-    CriticalQueue<Socket*>      reusableSocketQueue;        // All sockets previously disconnected that can be recycled
-    Socket*                     currentAcceptSocket;        // Last accept socket if manager is in server mode (because event is raised in the listen socket
-    CriticalMap<UUID, Socket*>  socketAccessMap;            // Only way to access a socket pointer from outside of this class, to prevent invalid memory access
+    CriticalRecyclableList<Buffer>  inUseBufferList;            // All buffers currently used in an overlapped operation
+    CriticalRecyclableList<Socket>  inUseSocketList;            // All sockets this instance is currently connected to
+    CriticalQueue<Socket*>          reusableSocketQueue;        // All sockets previously disconnected that can be reused
+    Socket*                         currentAcceptSocket;        // Last accept socket if manager is in server mode (because event is raised in the listen socket
+    CriticalMap<UUID, Socket*>      socketAccessMap;            // Only way to access a socket pointer from outside of this class, to prevent invalid memory access
 
-    State                       state;                      // Current state of this instance, used for cleanup and to test readiness
-    Type                        type;                       // Type of this manager, either client or server
-    std::vector<HANDLE>         threadHandles;              // Handles to all threads receiving IOCP events
-    HANDLE                      iocpHandle;                 // Handle to IO completion port
+    State                           state;                      // Current state of this instance, used for cleanup and to test readiness
+    Type                            type;                       // Type of this manager, either client or server
+    std::vector<HANDLE>             threadHandles;              // Handles to all threads receiving IOCP events
+    HANDLE                          iocpHandle;                 // Handle to IO completion port
 
     //////////////////////// End Attributes ///////////////////////
 
