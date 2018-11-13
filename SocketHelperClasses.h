@@ -227,6 +227,7 @@ public:
 
     Buffer& operator=(const Buffer& buff){
         ol = buff.ol;
+        operation = buff.operation;
         critList = buff.critList;
         it = buff.it;
         return *this;
