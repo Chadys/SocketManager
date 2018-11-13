@@ -63,6 +63,7 @@ private:
     Type                            type;                       // Type of this manager, either client or server
     std::vector<HANDLE>             threadHandles;              // Handles to all threads receiving IOCP events
     HANDLE                          iocpHandle;                 // Handle to IO completion port
+    volatile LONG64                 byteSent;                   // keep track of pending byte sent
 
     //////////////////////// End Attributes ///////////////////////
 
@@ -76,8 +77,10 @@ private:
     void                HandleWrite             (Socket *sockObj, Buffer *buf, DWORD bytesTransfered);
     void                HandleConnection        (Socket *sockObj, Buffer *buf);
     void                HandleDisconnect        (Socket *sockObj, Buffer *buf);
-    int                 PostRecv                (Socket *sock, Buffer *recvobj);                        // Post an overlapped recv operation on the socket
-    int                 PostSend                (Socket *sock, Buffer *sendobj);                        // Post an overlapped send operation on the socket
+    void                HandleISBNotify         (Socket *sockObj, Buffer *buf);
+    int                 PostRecv                (Socket *sock, Buffer *recvObj);                        // Post an overlapped recv operation on the socket
+    int                 PostSend                (Socket *sock, Buffer *sendObj);                        // Post an overlapped send operation on the socket
+    int                 PostISBNotify           (Socket *sock, Buffer *isbObj);                         // Post an overlapped operation on the socket to be notified of ideal send backlog value change
     void                ClearThreads            ();                                                     // Tells all working threads to shut down and free resources
     bool                InitAsyncSocketFuncs    ();                                                     // Initialize function pointer to needed mswsock functions
     bool                InitAsyncSocketFunc     (SOCKET sock, GUID guid, LPVOID func, DWORD size);      // Initialize function pointer to one mswsock function
@@ -91,6 +94,7 @@ private:
     bool                BindSocket              (Socket *sockObj, SOCKADDR_IN sockAddr);                // Bind socket to given address, delete it if failure
     int                 SetSocketOption         (SOCKET s, int option, const char *optPtr, int optSize);// Set a socket option to a given value and return error status
     inline int          SetSocketOption         (SOCKET s, int option, bool value)                      { return SetSocketOption(s, option, (const char*)&value, sizeof(value)); }
+    int                 GetSocketOption         (SOCKET s, int option, char *optPtr, int optSize);      // Get the value of a given socket option and return error status
     void                AddSocketToMap          (Socket *sockObj, UUID id);                             // Give unique id to socket and add it to access map
     bool                AcceptNewSocket         (Socket *listenSockObj);                                // Create a new socket waiting to accept new connection
 

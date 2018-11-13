@@ -1,19 +1,12 @@
 #ifndef SOCKETMANAGER_SOCKETHELPERCLASSES_H
 #define SOCKETMANAGER_SOCKETHELPERCLASSES_H
 
-#include <winsock2.h>
-#include <mswsock.h>
-#include <windows.h>
-#include <conio.h>
 #include <list>
 #include <queue>
 #include <unordered_map>
+#include "socket_headers.h"
 #include "Misc.h"
 #include "SocketManager.h"
-
-#ifndef SO_REUSE_UNICASTPORT //because ws2def.h of mingw64 is incomplete
-#define SO_REUSE_UNICASTPORT 0x3007
-#endif
 
 class SocketManager;
 
@@ -28,7 +21,8 @@ public:
 template<typename T>
 class CriticalRecyclableList : public CriticalContainerWrapper {    //prevent std::list malloc overhead by keeping a second list to store deleted element for later reuse
 private:
-    size_t max_recycled_size;
+    size_t                      max_recycled_size;
+    std::list<T>                recycle_list;
 public:
     std::list<T>                list;
 
@@ -61,9 +55,6 @@ public:
         LeaveCriticalSection(&critSec);
         return newEltIt;
     }
-
-private:
-    std::list<T>                recycle_list;
 };
 
 template<typename T>
@@ -216,14 +207,15 @@ private:
         Connect,
         Disconnect,
         Accept,
+        ISBChange,
         End
     };
 
 public:
     explicit Buffer(CriticalRecyclableList<Buffer> &l)                              : Buffer(l, Operation::Read) {}
     Buffer(CriticalRecyclableList<Buffer> &l, Operation op)                         : ListElt(l),
-                                                                            ol{}, buf(), bufLen(DEFAULT_BUFFER_SIZE),
-                                                                            operation(op) {}
+                                                                                      ol{}, buf(), bufLen(DEFAULT_BUFFER_SIZE),
+                                                                                      operation(op) {}
 
     Buffer& operator=(const Buffer& buff){
         ol = buff.ol;

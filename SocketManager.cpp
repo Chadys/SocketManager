@@ -1,9 +1,6 @@
 #include "SocketManager.h"
 #include "SocketHelperClasses.h"
 
-//TODO max send to avoid consuming all resources
-//TODO use SIO_IDEAL_SEND_BACKLOG_QUERY and SIO_IDEAL_SEND_BACKLOG_CHANGE
-
 LPFN_CONNECTEX          SocketManager::ConnectEx             = nullptr;
 LPFN_DISCONNECTEX       SocketManager::DisconnectEx          = nullptr;
 LPFN_ACCEPTEX           SocketManager::AcceptEx              = nullptr;
@@ -27,102 +24,124 @@ int SocketManager::ReceiveData(const char *data, u_long length, Socket *socket) 
 }
 
 void SocketManager::SendData(const char *data, u_long length, Socket *socket) {
-    if (socket == nullptr || socket->state != Socket::SocketState::CONNECTED)
+    if (socket == nullptr || socket->state != Socket::SocketState::CONNECTED) {
         return;
-    LOG("send %s\n", data);
+    }
+    //TODO limit comparing length to isb max
+    LOG("send %lu : %s\n", length, data);
 
     while(length > 0){
-        Buffer *sendobj = Buffer::Create(inUseBufferList, Buffer::Operation::Write);
+        Buffer *sendObj = Buffer::Create(inUseBufferList, Buffer::Operation::Write);
 
         u_long currentLen = length > Buffer::DEFAULT_BUFFER_SIZE ? Buffer::DEFAULT_BUFFER_SIZE : length;
-        strncpy(sendobj->buf, data, currentLen);
-        sendobj->bufLen = currentLen;
+        strncpy(sendObj->buf, data, currentLen);
+        sendObj->bufLen = currentLen;
 
-        if(PostSend(socket, sendobj) == SOCKET_ERROR){
+        if(PostSend(socket, sendObj) == SOCKET_ERROR){
             EnterCriticalSection(&socket->SockCritSec);
             {
                 socket->state = Socket::SocketState::FAILURE;
             }
             LeaveCriticalSection(&socket->SockCritSec);
-            Buffer::Delete(sendobj);
+            Buffer::Delete(sendObj);
             break;
         }
         length -= currentLen;
     }
 }
 
-int SocketManager::PostRecv(Socket *sock, Buffer *recvobj) {
+int SocketManager::PostRecv(Socket *sock, Buffer *recvObj) {
     WSABUF  wbuf;
-    int     rc, err;
+    int     err;
     DWORD   flags = 0;
 
-    recvobj->operation = Buffer::Operation::Read;
-    wbuf.buf = recvobj->buf;
-    wbuf.len = recvobj->bufLen;
+    wbuf.buf = recvObj->buf;
+    wbuf.len = recvObj->bufLen;
     EnterCriticalSection(&(sock->SockCritSec));
     {
-        rc = WSARecv(sock->s,           //s : A descriptor identifying a connected socket.
-                     &wbuf,             //lpBuffers : A pointer to an array of WSABUF structures. Each WSABUF structure contains a pointer to a buffer and the length, in bytes, of the buffer.
-                     1,                 //dwBufferCount : The number of WSABUF structures in the lpBuffers array.
-                     nullptr,           //lpNumberOfBytesRecvd : A pointer to the number, in bytes, of data received by this call if the receive operation completes immediately. Use NULL for this parameter if the lpOverlapped parameter is not NULL to avoid potentiall
-                     &flags,            //lpFlags : A pointer to flags used to modify the behavior of the WSARecv function call.
-                     &(recvobj->ol),    //lpOverlapped : A pointer to a WSAOVERLAPPED structure (ignored for nonoverlapped sockets).
-                     nullptr);          //lpCompletionRoutine : A pointer to the completion routine called when the receive operation has been completed (ignored for nonoverlapped sockets).
+        err = WSARecv(sock->s,           //s : A descriptor identifying a connected socket.
+                      &wbuf,             //lpBuffers : A pointer to an array of WSABUF structures. Each WSABUF structure contains a pointer to a buffer and the length, in bytes, of the buffer.
+                      1,                 //dwBufferCount : The number of WSABUF structures in the lpBuffers array.
+                      nullptr,           //lpNumberOfBytesRecvd : A pointer to the number, in bytes, of data received by this call if the receive operation completes immediately. Use NULL for this parameter if the lpOverlapped parameter is not NULL to avoid potentiall
+                      &flags,            //lpFlags : A pointer to flags used to modify the behavior of the WSARecv function call.
+                      &(recvObj->ol),    //lpOverlapped : A pointer to a WSAOVERLAPPED structure (ignored for nonoverlapped sockets).
+                      nullptr);          //lpCompletionRoutine : A pointer to the completion routine called when the receive operation has been completed (ignored for nonoverlapped sockets).
 
-        if (rc == SOCKET_ERROR) {
-            rc = NO_ERROR;
+        if (err == SOCKET_ERROR) {
             if ((err = WSAGetLastError()) != WSA_IO_PENDING) {
                 LOG("WSARecv* failed: %d\n", err);
-                rc = SOCKET_ERROR;
-            }
+                err = SOCKET_ERROR;
+            } else
+                err = NO_ERROR;
         }
-        if (rc == NO_ERROR) {
+        if (err == NO_ERROR) {
             // Increment outstanding overlapped operations
             sock->OutstandingRecv++;
         }
     }
     LeaveCriticalSection(&(sock->SockCritSec));
-    return rc;
+    return err;
 }
 
-int SocketManager::PostSend(Socket *sock, Buffer *sendobj) {
+int SocketManager::PostSend(Socket *sock, Buffer *sendObj) {
     WSABUF  wbuf;
-    int     rc, err;
+    int     err;
 
-    sendobj->operation = Buffer::Operation::Write;
-    wbuf.buf = sendobj->buf;
-    wbuf.len = sendobj->bufLen;
+    wbuf.buf = sendObj->buf;
+    wbuf.len = sendObj->bufLen;
+
     EnterCriticalSection(&(sock->SockCritSec));
     {
-        rc = WSASend(sock->s,           //s : A descriptor identifying a connected socket.
-                     &wbuf,             //lpBuffers : A pointer to an array of WSABUF structures. Each WSABUF structure contains a pointer to a buffer and the length, in bytes, of the buffer.
-                     1,                 //dwBufferCount : The number of WSABUF structures in the lpBuffers array.
-                     nullptr,           //lpNumberOfBytesSent : A pointer to the number, in bytes, sent by this call if the I/O operation completes immediately. Use NULL for this parameter if the lpOverlapped parameter is not NULL to avoid potentially erroneous results
-                     0,                 //dwFlags : The flags used to modify the behavior of the WSASend function call.
-                     &(sendobj->ol),    //lpOverlapped : A pointer to a WSAOVERLAPPED structure (ignored for nonoverlapped sockets).
-                     nullptr);          //lpCompletionRoutine : A pointer to the completion routine called when the receive operation has been completed (ignored for nonoverlapped sockets).
+        err = WSASend(sock->s,           //s : A descriptor identifying a connected socket.
+                      &wbuf,             //lpBuffers : A pointer to an array of WSABUF structures. Each WSABUF structure contains a pointer to a buffer and the length, in bytes, of the buffer.
+                      1,                 //dwBufferCount : The number of WSABUF structures in the lpBuffers array.
+                      nullptr,           //lpNumberOfBytesSent : A pointer to the number, in bytes, sent by this call if the I/O operation completes immediately. Use NULL for this parameter if the lpOverlapped parameter is not NULL to avoid potentially erroneous results
+                      0,                 //dwFlags : The flags used to modify the behavior of the WSASend function call.
+                      &(sendObj->ol),    //lpOverlapped : A pointer to a WSAOVERLAPPED structure (ignored for nonoverlapped sockets).
+                      nullptr);          //lpCompletionRoutine : A pointer to the completion routine called when the receive operation has been completed (ignored for nonoverlapped sockets).
 
-        if (rc == SOCKET_ERROR) {
-            rc = NO_ERROR;
+        if (err == SOCKET_ERROR) {
             if ((err = WSAGetLastError()) != WSA_IO_PENDING) {
-                LOG("WSASend* failed: %d [internal = %d]\n", err, sendobj->ol.Internal);
-                rc = SOCKET_ERROR;
-            }
+                LOG("WSASend* failed: %d [internal = %llu]\n", err, sendObj->ol.Internal);
+                err = SOCKET_ERROR;
+            } else
+                err = NO_ERROR;
         }
-        if (rc == NO_ERROR) {
+        if (err == NO_ERROR) {
             // Increment the outstanding operation count
             sock->OutstandingSend++;
+            InterlockedExchangeAdd64(&byteSent, sendObj->bufLen);
         }
     }
     LeaveCriticalSection(&(sock->SockCritSec));
-    return rc;
+    return err;
 }
-void SocketManager::HandleError(Socket *sockobj, Buffer *buf, DWORD error) {
+
+int SocketManager::PostISBNotify(Socket *sock, Buffer *isbObj) {
+    int err;
+
+    EnterCriticalSection(&(sock->SockCritSec));
+    {
+        err = idealsendbacklognotify(sock->s, &(isbObj->ol), nullptr);
+        if (err == SOCKET_ERROR) {
+            if ((err = WSAGetLastError()) != WSA_IO_PENDING) {
+                LOG("idealsendbacklognotify failed: %d\n", err);
+                err = SOCKET_ERROR;
+            } else
+                err = NO_ERROR;
+        }
+    }
+    LeaveCriticalSection(&(sock->SockCritSec));
+
+    return err;
+}
+
+void SocketManager::HandleError(Socket *sockObj, Buffer *buf, DWORD error) {
     bool    cleanupSocket   = false;
 
-    LOG("Handle error OP = %d; Error = %d\n", buf->operation, error);
+    LOG("Handle error OP = %d; Error = %lu\n", buf->operation, error);
 
-    EnterCriticalSection(&sockobj->SockCritSec);
+    EnterCriticalSection(&sockObj->SockCritSec);
     {
         switch (buf->operation){
             case Buffer::Operation::Connect :{
@@ -130,36 +149,37 @@ void SocketManager::HandleError(Socket *sockobj, Buffer *buf, DWORD error) {
                     TimeWaitValue *= 2;
                     if (TimeWaitValue > MAX_TIME_WAIT_VALUE)
                         TimeWaitValue = MAX_TIME_WAIT_VALUE;
-                    ConnectToNewSocket(sockobj->address, sockobj->port, sockobj->id);
-                    sockobj->s = INVALID_SOCKET;
-                    sockobj->state = Socket::SocketState::RETRY_CONNECTION;
+                    ConnectToNewSocket(sockObj->address, sockObj->port, sockObj->id);
+                    sockObj->s = INVALID_SOCKET;
+                    sockObj->state = Socket::SocketState::RETRY_CONNECTION;
                 } else {
-                    sockobj->state = Socket::SocketState::CONNECT_FAILURE;
+                    sockObj->state = Socket::SocketState::CONNECT_FAILURE;
                 }
                 break;
             }
             case Buffer::Operation::Read :{
-                sockobj->state = Socket::SocketState::FAILURE;
-                sockobj->OutstandingRecv--;
+                sockObj->state = Socket::SocketState::FAILURE;
+                sockObj->OutstandingRecv--;
                 break;
             }
             case Buffer::Operation::Write :{
-                sockobj->state = Socket::SocketState::FAILURE;
-                sockobj->OutstandingSend--;
+                sockObj->state = Socket::SocketState::FAILURE;
+                sockObj->OutstandingSend--;;
+                InterlockedExchangeAdd64(&byteSent, -buf->bufLen);
                 break;
             }
             default :{
-                sockobj->state = Socket::SocketState::FAILURE;
+                sockObj->state = Socket::SocketState::FAILURE;
             }
         }
-        if (sockobj->OutstandingRecv == 0 && sockobj->OutstandingSend == 0) {
+        if (sockObj->OutstandingRecv == 0 && sockObj->OutstandingSend == 0) {
             LOG("Freeing socket obj in HandleError\n");
             cleanupSocket = true;
         }
     }
-    LeaveCriticalSection(&sockobj->SockCritSec);
+    LeaveCriticalSection(&sockObj->SockCritSec);
     if(cleanupSocket)
-        Socket::DeleteOrDisconnect(sockobj, socketAccessMap);
+        Socket::DeleteOrDisconnect(sockObj, socketAccessMap);
     Buffer::Delete(buf);
 }
 
@@ -183,6 +203,10 @@ void SocketManager::HandleIo(Socket *sockObj, Buffer *buf, DWORD bytesTransfered
         }
         case Buffer::Operation::Disconnect :{
             HandleDisconnect(sockObj, buf);
+            break;
+        }
+        case Buffer::Operation::ISBChange :{
+            HandleISBNotify(sockObj, buf);
             break;
         }
         default:
@@ -248,6 +272,7 @@ void SocketManager::HandleWrite(Socket *sockObj, Buffer *buf, DWORD bytesTransfe
     EnterCriticalSection(&sockObj->SockCritSec);
     {
         sockObj->OutstandingSend--;
+        InterlockedExchangeAdd64(&byteSent, -buf->bufLen);
     }
     LeaveCriticalSection(&sockObj->SockCritSec);
     if (bytesTransfered < buf->bufLen){ //incomplete send, very small chance of it ever happening, socket send stream most probably corrupted
@@ -292,6 +317,13 @@ void SocketManager::HandleConnection(Socket *sockObj, Buffer *buf) {
         err = SOCKET_ERROR;
         LOG("PostRecv failed!\n");
     }
+    // ----------------------------- track isb
+    Buffer *isbBuf = Buffer::Create(inUseBufferList, Buffer::Operation::ISBChange);
+    if(PostISBNotify(sockObj, isbBuf) == SOCKET_ERROR){
+        err = SOCKET_ERROR;
+        LOG("PostISBNotify failed!\n");
+    }
+
     if (err != NO_ERROR){
         EnterCriticalSection(&sockObj->SockCritSec);
         {
@@ -318,6 +350,25 @@ void SocketManager::HandleDisconnect(Socket *sockObj, Buffer *buf) {
     Buffer::Delete(buf);
 }
 
+void SocketManager::HandleISBNotify(Socket *sockObj, Buffer *buf) {
+    DWORD sendBufVal = 0;
+    ULONG isbVal;
+    bool queryFail = false;
+
+    LOG("isb changed\n");
+    if (GetSocketOption(sockObj->s, SO_SNDBUF, (char*)&sendBufVal, sizeof(sendBufVal)) == SOCKET_ERROR ||
+        PostISBNotify(sockObj, buf) == SOCKET_ERROR ||
+        (idealsendbacklogquery(sockObj->s, &isbVal) == SOCKET_ERROR && (queryFail = true))){
+        if (queryFail) {
+            LOG("idealsendbacklognotify failed: %d\n", WSAGetLastError());
+        }
+        //TODO put default max value
+        return;
+    }
+    //TODO put calculated max value
+    //keep the following equation satisfied : ISB value == send buffer limit + (number of simultaneous overlapped send requests * data length per send request)
+}
+
 DWORD WINAPI SocketManager::IOCPWorkerThread(LPVOID lpParam) {
     Socket         *socket;
     Buffer         *buffer;
@@ -338,7 +389,7 @@ DWORD WINAPI SocketManager::IOCPWorkerThread(LPVOID lpParam) {
         buffer = CONTAINING_RECORD(lpOverlapped, Buffer, ol);
         if (rc == FALSE) {
             error = GetLastError();
-            LOG("GetQueuedCompletionStatus failed for operation %d : %d\n", buffer->operation, error);
+            LOG("GetQueuedCompletionStatus failed for operation %d : %lu\n", buffer->operation, error);
 
             if(socket != nullptr) {
                 rc = WSAGetOverlappedResult(socket->s, &buffer->ol, &BytesTransfered, FALSE, &Flags);
@@ -359,7 +410,7 @@ DWORD WINAPI SocketManager::IOCPWorkerThread(LPVOID lpParam) {
     return NO_ERROR;
 }
 
-SocketManager::SocketManager(Type type_) : state(State::NOT_INITIALIZED), type(type_),
+SocketManager::SocketManager(Type type_) : state(State::NOT_INITIALIZED), type(type_), byteSent(0),
                                            iocpHandle(INVALID_HANDLE_VALUE), currentAcceptSocket(nullptr) {
     int         res;
 
@@ -383,7 +434,7 @@ SocketManager::SocketManager(Type type_) : state(State::NOT_INITIALIZED), type(t
                                              0,                      //CompletionKey[in] : The per-handle user-defined completion key that is included in every I/O completion packet for the specified file handle. (ignored)
                                              0                       //NumberOfConcurrentThreads[in] : The maximum number of threads that the operating system can allow to concurrently process I/O completion packets for the I/O completion port. If this parameter is zero, the system allows as many concurrently running threads as there are processors in the system.
                                             )) == nullptr) {
-        LOG("CreateIoCompletionPort failed / error %d\n", GetLastError());
+        LOG("CreateIoCompletionPort failed / error %lu\n", GetLastError());
         return;
     }
     LOG("CreateIoCompletionPort ok\n");
@@ -407,11 +458,11 @@ SocketManager::SocketManager(Type type_) : state(State::NOT_INITIALIZED), type(t
                                          0,                       // use default creation flags
                                          &ThreadID                // thread identifier
                                         )) == nullptr) {
-            LOG("CreateThread failed / error %d\n", GetLastError());
+            LOG("CreateThread failed / error %lu\n", GetLastError());
             ClearThreads();
             return;
         }
-        LOG("CreateThread %d ok\n", ThreadID);
+        LOG("CreateThread %lu ok\n", ThreadID);
         threadHandles.push_back(ThreadHandle);
     }
     state = State::THREADS_INITIALIZED;
@@ -444,18 +495,18 @@ SocketManager::~SocketManager() {
 void SocketManager::ClearThreads() {
     if(!threadHandles.empty()){
         for (int i = 0 ; i < threadHandles.size() ; i++){
-            Buffer *endobj = Buffer::Create(inUseBufferList, Buffer::Operation::End);
+            Buffer *endObj = Buffer::Create(inUseBufferList, Buffer::Operation::End);
 
             // Unblock threads from GetQueuedCompletionStatus call and signal application close
-            PostQueuedCompletionStatus(iocpHandle,              //CompletionPort : A handle to an I/O completion port to which the I/O completion packet is to be posted.
-                                       0,                       //dwNumberOfBytesTransferred : The value to be returned through the lpNumberOfBytesTransferred parameter of the GetQueuedCompletionStatus function.
-                                       (ULONG_PTR)nullptr,      //dwNumberOfBytesTransferred : The value to be returned through the lpCompletionKey parameter of the GetQueuedCompletionStatus function.
-                                       &(endobj->ol));          //lpOverlapped : The value to be returned through the lpOverlapped parameter of the GetQueuedCompletionStatus function.
+            PostQueuedCompletionStatus(iocpHandle,                      //CompletionPort : A handle to an I/O completion port to which the I/O completion packet is to be posted.
+                                       0,                               //dwNumberOfBytesTransferred : The value to be returned through the lpNumberOfBytesTransferred parameter of the GetQueuedCompletionStatus function.
+                                       (ULONG_PTR)nullptr,              //dwNumberOfBytesTransferred : The value to be returned through the lpCompletionKey parameter of the GetQueuedCompletionStatus function.
+                                       &(endObj->ol));                  //lpOverlapped : The value to be returned through the lpOverlapped parameter of the GetQueuedCompletionStatus function.
         }
-        WaitForMultipleObjects(threadHandles.size(),            //nCount : The number of object handles in the array pointed to by lpHandles
-                               threadHandles.data(),            //lpHandles : An array of object handles.
-                               TRUE,                            //bWaitAll : If this parameter is TRUE, the function returns when the state of all objects in the lpHandles array is signaled
-                               INFINITE);                       //dwMilliseconds : The time-out interval, in milliseconds. If dwMilliseconds is INFINITE, the function will return only when the specified objects are signaled.
+        WaitForMultipleObjects(static_cast<DWORD>(threadHandles.size()),//nCount : The number of object handles in the array pointed to by lpHandles
+                               threadHandles.data(),                    //lpHandles : An array of object handles.
+                               TRUE,                                    //bWaitAll : If this parameter is TRUE, the function returns when the state of all objects in the lpHandles array is signaled
+                               INFINITE);                               //dwMilliseconds : The time-out interval, in milliseconds. If dwMilliseconds is INFINITE, the function will return only when the specified objects are signaled.
         for (HANDLE &threadHandle : threadHandles){
             CloseHandle(threadHandle);
         }
@@ -491,7 +542,7 @@ bool SocketManager::AssociateSocketToIOCP(Socket *sockObj){
                                         (ULONG_PTR)sockObj,          //CompletionKey[in] : The per-handle user-defined completion key that is included in every I/O completion packet for the specified file handle.
                                         0);                          //NumberOfConcurrentThreads[in] : This parameter is ignored if the ExistingCompletionPort parameter is not NULL.
     if (hrc == nullptr) {
-        LOG("CreateIoCompletionPort failed / error %d\n", GetLastError());
+        LOG("CreateIoCompletionPort failed / error %lu\n", GetLastError());
         Socket::Delete(sockObj);
         return false;
     }
@@ -528,6 +579,21 @@ int SocketManager::SetSocketOption(SOCKET s, int option, const char *optPtr, int
     ) == SOCKET_ERROR){ //shouldn't ever happens
         err = WSAGetLastError();
         LOG("setsockopt for option %d failed : %d\n", option, err);
+    }
+    return err;
+}
+
+int SocketManager::GetSocketOption(SOCKET s, int option, char *optPtr, int optSize){
+    int err = NO_ERROR;
+
+    if(getsockopt(s,                                      //s : A descriptor that identifies a socket.
+                  SOL_SOCKET,                             //level : The level at which the option is defined
+                  option,                                 //optname : The socket option for which the value is to be retrieved. The optname parameter must be a socket option defined within the specified level, or behavior is undefined.
+                  optPtr,                                 //optval : A pointer to the buffer in which the value for the requested option is specified.
+                  &optSize                                //optlen : A pointer to the size, in bytes, of the optval buffer.
+    ) == SOCKET_ERROR){ //shouldn't ever happens
+        err = WSAGetLastError();
+        LOG("getsockopt for option %d failed : %d\n", option, err);
     }
     return err;
 }
@@ -586,19 +652,19 @@ UUID SocketManager::ConnectToNewSocket(const char *address, u_short port, UUID i
     sockAddr.sin_addr.s_addr = inet_addr(address);
     if(WSAHtons(sockObj->s, port, &sockAddr.sin_port) == SOCKET_ERROR) { // host-to-network-short: big-endian conversion of a 16 byte value
         //WSANOTINITIALISED, WSAENETDOWN, WSAENOTSOCK, WSAEFAULT
-        LOG("WSAHtonl failed / error %d\n", GetLastError());
+        LOG("WSAHtonl failed / error %lu\n", GetLastError());
         Socket::Delete(sockObj);
         return nullId;
     }
 
-    Buffer *connectobj = Buffer::Create(inUseBufferList, Buffer::Operation::Connect);
+    Buffer *connectObj = Buffer::Create(inUseBufferList, Buffer::Operation::Connect);
     if (!ConnectEx(sock,                        //s : A descriptor identifying an unconnected socket.
                    (SOCKADDR*)(&sockAddr),      //name : A pointer to a sockaddr structure that specifies the address to which to connect. For IPv4, the sockaddr contains AF_INET for the address family, the destination IPv4 address, and the destination port.
                    sizeof(sockAddr),            //namelen : The length, in bytes, of the sockaddr structure pointed to by the name parameter.
                    nullptr,                     //lpSendBuffer : A pointer to the buffer to be transferred after a connection is established. This parameter is optional.
                    0,                           //dwSendDataLength : The length, in bytes, of data pointed to by the lpSendBuffer parameter. This parameter is ignored when the lpSendBuffer parameter is NULL.
                    nullptr,                     //lpdwBytesSent : On successful return, this parameter points to a DWORD value that indicates the number of bytes that were sent after the connection was established. This parameter is ignored when the lpSendBuffer parameter is NULL.
-                   &(connectobj->ol)            //lpOverlapped : An OVERLAPPED structure used to process the request. The lpOverlapped parameter must be specified, and cannot be NULL.
+                   &(connectObj->ol)            //lpOverlapped : An OVERLAPPED structure used to process the request. The lpOverlapped parameter must be specified, and cannot be NULL.
                   )) {
         if ((err = WSAGetLastError()) != WSA_IO_PENDING) {
             LOG("ConnectToNewSocket: ConnectEx failed: %d\n", err);
@@ -622,15 +688,15 @@ bool SocketManager::AcceptNewSocket(Socket *listenSockObj){
     }
     currentAcceptSocket = acceptSockObj;
 
-    Buffer *acceptobj = Buffer::Create(inUseBufferList, Buffer::Operation::Accept);
+    Buffer *acceptObj = Buffer::Create(inUseBufferList, Buffer::Operation::Accept);
     if (!AcceptEx(listenSockObj->s,             //sListenSocket : A descriptor identifying a socket that has already been called with the listen function. A server application waits for attempts to connect on this socket.
                   acceptSockObj->s,             //sAcceptSocket : A descriptor identifying a socket on which to accept an incoming connection. This socket must not be bound or connected.
-                  acceptobj->buf,               //lpOutputBuffer : A pointer to a buffer that receives the first block of data sent on a new connection, the local address of the server, and the remote address of the client. The receive data is written to the first part of the buffer starting at offset zero, while the addresses are written to the latter part of the buffer. This parameter must be specified.
+                  acceptObj->buf,               //lpOutputBuffer : A pointer to a buffer that receives the first block of data sent on a new connection, the local address of the server, and the remote address of the client. The receive data is written to the first part of the buffer starting at offset zero, while the addresses are written to the latter part of the buffer. This parameter must be specified.
                   0,                            //dwReceiveDataLength : The number of bytes in lpOutputBuffer that will be used for actual receive data at the beginning of the buffer. This size should not include the size of the local address of the server, nor the remote address of the client; they are appended to the output buffer. If dwReceiveDataLength is zero, accepting the connection will not result in a receive operation. Instead, AcceptEx completes as soon as a connection arrives, without waiting for any data.
                   sizeof(SOCKADDR_IN)+16,       //dwLocalAddressLength : The number of bytes reserved for the local address information. This value must be at least 16 bytes more than the maximum address length for the transport protocol in use.
                   sizeof(SOCKADDR_IN)+16,       //dwRemoteAddressLength : The number of bytes reserved for the remote address information. This value must be at least 16 bytes more than the maximum address length for the transport protocol in use. Cannot be zero.
                   nullptr,                      //lpdwBytesReceived : A pointer to a DWORD that receives the count of bytes received. This parameter is set only if the operation completes synchronously. If it returns ERROR_IO_PENDING and is completed later, then this DWORD is never set and you must obtain the number of bytes read from the completion notification mechanism.
-                  &(acceptobj->ol)              //lpOverlapped : An OVERLAPPED structure used to process the request. The lpOverlapped parameter must be specified, and cannot be NULL.
+                  &(acceptObj->ol)              //lpOverlapped : An OVERLAPPED structure used to process the request. The lpOverlapped parameter must be specified, and cannot be NULL.
     )) {
         if ((err = WSAGetLastError()) != WSA_IO_PENDING) {
             LOG("ConnectEx failed: %d\n", err);
@@ -663,7 +729,7 @@ UUID SocketManager::ListenToNewSocket(u_short port, bool fewCLientsExpected) {
     sockAddr.sin_addr.s_addr = INADDR_ANY;
     if(WSAHtons(listenSockObj->s, port, &sockAddr.sin_port) == SOCKET_ERROR) { // host-to-network-short: big-endian conversion of a 16 byte value
         //WSANOTINITIALISED, WSAENETDOWN, WSAENOTSOCK, WSAEFAULT
-        LOG("WSAHtonl failed / error %d\n", GetLastError());
+        LOG("WSAHtonl failed / error %lu\n", GetLastError());
         Socket::Delete(listenSockObj);
         return nullId;
     }

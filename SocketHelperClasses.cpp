@@ -41,6 +41,8 @@ void Socket::DeleteOrDisconnect(Socket *obj, CriticalMap<UUID, Socket*> &critMap
                     obj->Close(true);
                     break;
                 }
+                default:
+                    break;
             }
         }
         if (obj->state != RETRY_CONNECTION) {
