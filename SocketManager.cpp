@@ -23,11 +23,14 @@ int SocketManager::ReceiveData(const char *data, u_long length, Socket *socket) 
     return 1;
 }
 
-void SocketManager::SendData(const char *data, u_long length, Socket *socket) {
+bool SocketManager::SendData(const char *data, u_long length, Socket *socket) {
     if (socket == nullptr || socket->state != Socket::SocketState::CONNECTED) {
-        return;
+        return false;
     }
-    //TODO limit comparing length to isb max
+    if (length + socket->pendingByteSent > socket->maxPendingByteSent){
+        LOG("Socket %llu : Too mush pending send, retry after more data has been acknowledged by receiver\n", socket->s);
+        return false;
+    }
     LOG("send %lu : %s\n", length, data);
 
     while(length > 0){
@@ -48,6 +51,7 @@ void SocketManager::SendData(const char *data, u_long length, Socket *socket) {
         }
         length -= currentLen;
     }
+    return true;
 }
 
 int SocketManager::PostRecv(Socket *sock, Buffer *recvObj) {
@@ -110,7 +114,7 @@ int SocketManager::PostSend(Socket *sock, Buffer *sendObj) {
         if (err == NO_ERROR) {
             // Increment the outstanding operation count
             sock->OutstandingSend++;
-            InterlockedExchangeAdd64(&byteSent, sendObj->bufLen);
+            InterlockedExchangeAdd64(&sock->pendingByteSent, static_cast<LONG64>(sendObj->bufLen));
         }
     }
     LeaveCriticalSection(&(sock->SockCritSec));
@@ -165,7 +169,7 @@ void SocketManager::HandleError(Socket *sockObj, Buffer *buf, DWORD error) {
             case Buffer::Operation::Write :{
                 sockObj->state = Socket::SocketState::FAILURE;
                 sockObj->OutstandingSend--;;
-                InterlockedExchangeAdd64(&byteSent, -buf->bufLen);
+                InterlockedExchangeAdd64(&sockObj->pendingByteSent, -static_cast<LONG64>(buf->bufLen));
                 break;
             }
             default :{
@@ -206,7 +210,7 @@ void SocketManager::HandleIo(Socket *sockObj, Buffer *buf, DWORD bytesTransfered
             break;
         }
         case Buffer::Operation::ISBChange :{
-            HandleISBNotify(sockObj, buf);
+            UpdateISB(sockObj, buf);
             break;
         }
         default:
@@ -272,7 +276,7 @@ void SocketManager::HandleWrite(Socket *sockObj, Buffer *buf, DWORD bytesTransfe
     EnterCriticalSection(&sockObj->SockCritSec);
     {
         sockObj->OutstandingSend--;
-        InterlockedExchangeAdd64(&byteSent, -buf->bufLen);
+        InterlockedExchangeAdd64(&sockObj->pendingByteSent, -static_cast<LONG64>(buf->bufLen));
     }
     LeaveCriticalSection(&sockObj->SockCritSec);
     if (bytesTransfered < buf->bufLen){ //incomplete send, very small chance of it ever happening, socket send stream most probably corrupted
@@ -319,10 +323,7 @@ void SocketManager::HandleConnection(Socket *sockObj, Buffer *buf) {
     }
     // ----------------------------- track isb
     Buffer *isbBuf = Buffer::Create(inUseBufferList, Buffer::Operation::ISBChange);
-    if(PostISBNotify(sockObj, isbBuf) == SOCKET_ERROR){
-        err = SOCKET_ERROR;
-        LOG("PostISBNotify failed!\n");
-    }
+    UpdateISB(sockObj, isbBuf);
 
     if (err != NO_ERROR){
         EnterCriticalSection(&sockObj->SockCritSec);
@@ -350,23 +351,20 @@ void SocketManager::HandleDisconnect(Socket *sockObj, Buffer *buf) {
     Buffer::Delete(buf);
 }
 
-void SocketManager::HandleISBNotify(Socket *sockObj, Buffer *buf) {
-    DWORD sendBufVal = 0;
+void SocketManager::UpdateISB(Socket *sockObj, Buffer *buf) {
     ULONG isbVal;
     bool queryFail = false;
 
-    LOG("isb changed\n");
-    if (GetSocketOption(sockObj->s, SO_SNDBUF, (char*)&sendBufVal, sizeof(sendBufVal)) == SOCKET_ERROR ||
-        PostISBNotify(sockObj, buf) == SOCKET_ERROR ||
+    if (PostISBNotify(sockObj, buf) == SOCKET_ERROR ||
         (idealsendbacklogquery(sockObj->s, &isbVal) == SOCKET_ERROR && (queryFail = true))){
         if (queryFail) {
             LOG("idealsendbacklognotify failed: %d\n", WSAGetLastError());
         }
-        //TODO put default max value
-        return;
+        isbVal = DEFAULT_MAX_PENDING_BYTE_SENT;
     }
-    //TODO put calculated max value
-    //keep the following equation satisfied : ISB value == send buffer limit + (number of simultaneous overlapped send requests * data length per send request)
+    LOG("isb changed to %lu\n", isbVal);
+    SetSocketOption(sockObj->s, SO_SNDBUF, (char*)&isbVal, sizeof(isbVal));
+    sockObj->maxPendingByteSent = isbVal*2;
 }
 
 DWORD WINAPI SocketManager::IOCPWorkerThread(LPVOID lpParam) {
@@ -410,7 +408,7 @@ DWORD WINAPI SocketManager::IOCPWorkerThread(LPVOID lpParam) {
     return NO_ERROR;
 }
 
-SocketManager::SocketManager(Type type_) : state(State::NOT_INITIALIZED), type(type_), byteSent(0),
+SocketManager::SocketManager(Type type_) : state(State::NOT_INITIALIZED), type(type_),
                                            iocpHandle(INVALID_HANDLE_VALUE), currentAcceptSocket(nullptr) {
     int         res;
 

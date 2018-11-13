@@ -132,7 +132,7 @@ class Socket : public ListElt<Socket> {     // Contains all needed information a
 public:
     Socket(CriticalRecyclableList<Socket> &l, SocketManager *c, SOCKET s_, int af_) : ListElt(l), id(), address(""), port(0),
                                                                             s(s_), af(af_), state(SocketState::INIT),
-                                                                            OutstandingRecv(0), OutstandingSend(0),
+                                                                            OutstandingRecv(0), OutstandingSend(0), pendingByteSent(0),
                                                                             SockCritSec{}, client(c), timeWaitStartTime(0) {
         InitializeCriticalSection(&SockCritSec);
     }
@@ -149,6 +149,7 @@ public:
         af = sock.af;
         OutstandingRecv = sock.OutstandingRecv;
         OutstandingSend = sock.OutstandingSend;
+        pendingByteSent = sock.pendingByteSent;
         SockCritSec = sock.SockCritSec;
         client = sock.client;
         timeWaitStartTime = sock.timeWaitStartTime;
@@ -182,9 +183,11 @@ private:
     int                         af;                     // Address family of socket
     volatile LONG               OutstandingRecv,        // Number of outstanding overlapped ops on
                                 OutstandingSend;
+    volatile LONG64             pendingByteSent;        // keep track of pending byte sent
     CRITICAL_SECTION            SockCritSec;            // Protect access to this structure
     SocketManager*              client;                 // Pointer to containing class
     DWORD                       timeWaitStartTime;      // Counter to test if socket has gotten out of TIME_WAIT state after a disconnect
+    ULONG                       maxPendingByteSent;     // Max pending byte sent calculated using ISB, used as threshold to prevent more send if memory becomes limited
 
     static void     Delete                  (Socket *obj);                                          // Close socket before deleting it
     static void     DeleteOrDisconnect      (Socket *obj, CriticalMap<UUID, Socket*> &critMap);     // Try to disconnect socket for reuse or close and delete it if is is not possible

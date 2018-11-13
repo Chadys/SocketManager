@@ -15,12 +15,13 @@ class SocketManager {                            // Manage a client connected to
 private:
     /************************ Attributes **************************/
 
-    static const int            FAMILY                      = AF_INET;      // IPv4 address family.
-    static const int            THREADS_PER_PROC            = 1;
-    static const int            MAX_UNUSED_SOCKET           = 30;
-    static const int            DEFAULT_TIME_WAIT_VALUE     = 120000;       // Either 120 or 240sec depending on doc page, but tests confirmed 120 (https://docs.microsoft.com/en-us/biztalk/technical-guides/settings-that-can-be-modified-to-improve-network-performance | https://docs.microsoft.com/en-us/previous-versions/windows/it-pro/windows-2000-server/cc938217(v=technet.10))
-    static const int            MIN_TIME_WAIT_VALUE         = 30000;        // Range goes from 30 to 300sec according to microsoft doc
-    static const int            MAX_TIME_WAIT_VALUE         = 300000;       // Range goes from 30 to 300sec according to microsoft doc
+    static const int            FAMILY                          = AF_INET;      // IPv4 address family.
+    static const int            THREADS_PER_PROC                = 1;
+    static const int            MAX_UNUSED_SOCKET               = 30;
+    static const int            DEFAULT_TIME_WAIT_VALUE         = 120000;       // Either 120 or 240sec depending on doc page, but tests confirmed 120 (https://docs.microsoft.com/en-us/biztalk/technical-guides/settings-that-can-be-modified-to-improve-network-performance | https://docs.microsoft.com/en-us/previous-versions/windows/it-pro/windows-2000-server/cc938217(v=technet.10))
+    static const int            MIN_TIME_WAIT_VALUE             = 30000;        // Range goes from 30 to 300sec according to microsoft doc
+    static const int            MAX_TIME_WAIT_VALUE             = 300000;       // Range goes from 30 to 300sec according to microsoft doc
+    static const LONG64         DEFAULT_MAX_PENDING_BYTE_SENT   = 65536;        // 64k, default value
     static const TCHAR *        TIME_WAIT_REG_KEY;
     static const TCHAR *        TIME_WAIT_REG_VALUE;
     static DWORD                TimeWaitValue;
@@ -63,7 +64,6 @@ private:
     Type                            type;                       // Type of this manager, either client or server
     std::vector<HANDLE>             threadHandles;              // Handles to all threads receiving IOCP events
     HANDLE                          iocpHandle;                 // Handle to IO completion port
-    volatile LONG64                 byteSent;                   // keep track of pending byte sent
 
     //////////////////////// End Attributes ///////////////////////
 
@@ -77,7 +77,7 @@ private:
     void                HandleWrite             (Socket *sockObj, Buffer *buf, DWORD bytesTransfered);
     void                HandleConnection        (Socket *sockObj, Buffer *buf);
     void                HandleDisconnect        (Socket *sockObj, Buffer *buf);
-    void                HandleISBNotify         (Socket *sockObj, Buffer *buf);
+    void                UpdateISB               (Socket *sockObj, Buffer *buf);                         // Get ISB value to calculate threshold value for pending send operation
     int                 PostRecv                (Socket *sock, Buffer *recvObj);                        // Post an overlapped recv operation on the socket
     int                 PostSend                (Socket *sock, Buffer *sendObj);                        // Post an overlapped send operation on the socket
     int                 PostISBNotify           (Socket *sock, Buffer *isbObj);                         // Post an overlapped operation on the socket to be notified of ideal send backlog value change
@@ -85,7 +85,7 @@ private:
     bool                InitAsyncSocketFuncs    ();                                                     // Initialize function pointer to needed mswsock functions
     bool                InitAsyncSocketFunc     (SOCKET sock, GUID guid, LPVOID func, DWORD size);      // Initialize function pointer to one mswsock function
     void                InitTimeWaitValue       ();                                                     // Initialize TIME_WAIT detected value
-    void                SendData                (const char *data, u_long length, Socket *socket);      // Send a given buffer to the given socket
+    bool                SendData                (const char *data, u_long length, Socket *socket);      // Send a given buffer to the given socket
     bool                ShouldReuseSocket       ();                                                     // returns a bool indicating if manager is accepting to reuse socket
     Socket*             ReuseSocket             ();                                                     // Try to recycle a disconnected socket, or create a new one
     UUID                ConnectToNewSocket      (const char *address, u_short port, UUID id);           // Connect to and start listening to new read/write event on this socket
@@ -106,9 +106,11 @@ public:
     inline bool         isReady             () const                                                { return state == State::READY; };
     inline bool         isClientSocketReady (UUID socketId)                                         { Socket *sockObj = socketAccessMap.Get(socketId); return sockObj != nullptr && sockObj->state == Socket::SocketState::CONNECTED; };
     inline bool         isServerSocketReady (UUID socketId)                                         { Socket *sockObj = socketAccessMap.Get(socketId); return sockObj != nullptr && sockObj->state == Socket::SocketState::LISTENING; };
-    inline void         SendData            (const char *data, u_long length, UUID socketId)        { return SendData(data, length, socketAccessMap.Get(socketId)); }
-    inline void         SendDataToAll       (const char *data, u_long length)                       { for (Socket& sock : inUseSocketList.list) SendData(data, length, &sock); }
+    inline bool         SendData            (const char *data, u_long length, UUID socketId)        { return SendData(data, length, socketAccessMap.Get(socketId)); }
+    // TODO create ForceSendData to send even if network is congested
     virtual int         ReceiveData         (const char* data, u_long length, Socket *socket);      // Do what needs to be done when receiving content from a socket //TODO make pure virtual
+    inline int          SendDataToAll       (const char *data, u_long length)                       { int nbSucc = 0; for (Socket& sock : inUseSocketList.list) nbSucc += SendData(data, length, &sock); return nbSucc; }
+
     /* Implementation recommendation :
      * Since a single read can be received by different threads,
      * keep a map socket->buffer as attribute inside your implementing class
