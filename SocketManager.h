@@ -61,14 +61,15 @@ private:
     CriticalMap<UUID, Socket*>      socketAccessMap;            // Only way to access a socket pointer from outside of this class, to prevent invalid memory access
 
     State                           state;                      // Current state of this instance, used for cleanup and to test readiness
-    Type                            type;                       // Type of this manager, either client or server
     std::vector<HANDLE>             threadHandles;              // Handles to all threads receiving IOCP events
     HANDLE                          iocpHandle;                 // Handle to IO completion port
-
+    unsigned short                  isbFactor;                  // Factor of isb that send buffer can fill before no send send are allowed (0 for no limit)
+protected:
+    Type                            type;                       // Type of this manager, either client or server
     //////////////////////// End Attributes ///////////////////////
 
     /************************ Methods **************************/
-
+private:
     static DWORD WINAPI IOCPWorkerThread        (LPVOID lpParam);                                       // Per-thread function receiving IOCP events
 
     void                HandleError             (Socket *sockObj, Buffer *buf, DWORD error);            // Manage one IOCP error
@@ -85,7 +86,6 @@ private:
     bool                InitAsyncSocketFuncs    ();                                                     // Initialize function pointer to needed mswsock functions
     bool                InitAsyncSocketFunc     (SOCKET sock, GUID guid, LPVOID func, DWORD size);      // Initialize function pointer to one mswsock function
     void                InitTimeWaitValue       ();                                                     // Initialize TIME_WAIT detected value
-    bool                SendData                (const char *data, u_long length, Socket *socket);      // Send a given buffer to the given socket
     bool                ShouldReuseSocket       ();                                                     // returns a bool indicating if manager is accepting to reuse socket
     Socket*             ReuseSocket             ();                                                     // Try to recycle a disconnected socket, or create a new one
     UUID                ConnectToNewSocket      (const char *address, u_short port, UUID id);           // Connect to and start listening to new read/write event on this socket
@@ -94,22 +94,24 @@ private:
     bool                BindSocket              (Socket *sockObj, SOCKADDR_IN sockAddr);                // Bind socket to given address, delete it if failure
     int                 SetSocketOption         (SOCKET s, int option, const char *optPtr, int optSize);// Set a socket option to a given value and return error status
     inline int          SetSocketOption         (SOCKET s, int option, bool value)                      { return SetSocketOption(s, option, (const char*)&value, sizeof(value)); }
-    int                 GetSocketOption         (SOCKET s, int option, char *optPtr, int optSize);      // Get the value of a given socket option and return error status
     void                AddSocketToMap          (Socket *sockObj, UUID id);                             // Give unique id to socket and add it to access map
     bool                AcceptNewSocket         (Socket *listenSockObj);                                // Create a new socket waiting to accept new connection
-
+protected:
+    int                 GetSocketOption         (SOCKET s, int option, char *optPtr, int optSize);      // Get the value of a given socket option and return error status
+    bool                SendData                (const char *data, u_long length, Socket *socket);      // Send a given buffer to the given socket
+    void                ChangeSocketState       (Socket *sock, Socket::SocketState state);              // Change the state of a socket (for manual close for example
 public:
-    explicit            SocketManager       (Type type_);
-                        ~SocketManager      ();
-    UUID                ListenToNewSocket   (u_short port, bool fewCLientsExpected = false);        // Start listening to new connection event on this socket and handle those connection in new sockets
-    inline UUID         ConnectToNewSocket  (const char *address, u_short port)                     { return ConnectToNewSocket(address, port, Misc::CreateNilUUID()); }
-    inline bool         isReady             () const                                                { return state == State::READY; };
-    inline bool         isClientSocketReady (UUID socketId)                                         { Socket *sockObj = socketAccessMap.Get(socketId); return sockObj != nullptr && sockObj->state == Socket::SocketState::CONNECTED; };
-    inline bool         isServerSocketReady (UUID socketId)                                         { Socket *sockObj = socketAccessMap.Get(socketId); return sockObj != nullptr && sockObj->state == Socket::SocketState::LISTENING; };
-    inline bool         SendData            (const char *data, u_long length, UUID socketId)        { return SendData(data, length, socketAccessMap.Get(socketId)); }
-    // TODO create ForceSendData to send even if network is congested
-    virtual int         ReceiveData         (const char* data, u_long length, Socket *socket);      // Do what needs to be done when receiving content from a socket //TODO make pure virtual
-    inline int          SendDataToAll       (const char *data, u_long length)                       { int nbSucc = 0; for (Socket& sock : inUseSocketList.list) nbSucc += SendData(data, length, &sock); return nbSucc; }
+    explicit            SocketManager           (Type t, unsigned short factor = 0);
+                        ~SocketManager          ();
+    UUID                ListenToNewSocket       (u_short port, bool fewCLientsExpected = false);        // Start listening to new connection event on this socket and handle those connection in new sockets
+    inline UUID         ConnectToNewSocket      (const char *address, u_short port)                     { return ConnectToNewSocket(address, port, Misc::CreateNilUUID()); }
+    inline bool         isReady                 () const                                                { return state == State::READY; };
+    inline bool         isSocketInitialising    (UUID socketId)                                         { Socket *sockObj = socketAccessMap.Get(socketId); return sockObj != nullptr && sockObj->state <= Socket::SocketState::RETRY_CONNECTION; };
+    inline bool         isClientSocketReady     (UUID socketId)                                         { Socket *sockObj = socketAccessMap.Get(socketId); return sockObj != nullptr && sockObj->state == Socket::SocketState::CONNECTED; };
+    inline bool         isServerSocketReady     (UUID socketId)                                         { Socket *sockObj = socketAccessMap.Get(socketId); return sockObj != nullptr && sockObj->state == Socket::SocketState::LISTENING; };
+    inline bool         SendData                (const char *data, u_long length, UUID socketId)        { return SendData(data, length, socketAccessMap.Get(socketId)); }
+    inline int          SendDataToAll           (const char *data, u_long length)                       { int nbSucc = 0; for (Socket& sock : inUseSocketList.list) nbSucc += SendData(data, length, &sock); return nbSucc; }
+    virtual int         ReceiveData             (const char* data, u_long length, Socket *socket) = 0;  // Do what needs to be done when receiving content from a socket
 
     /* Implementation recommendation :
      * Since a single read can be received by different threads,

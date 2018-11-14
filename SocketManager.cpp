@@ -8,19 +8,12 @@ const TCHAR *           SocketManager::TIME_WAIT_REG_KEY     = TEXT("SYSTEM\\Cur
 const TCHAR *           SocketManager::TIME_WAIT_REG_VALUE   = TEXT("TcpTimedWaitDelay");
 DWORD                   SocketManager::TimeWaitValue         = 0;
 
-
-int SocketManager::ReceiveData(const char *data, u_long length, Socket *socket) {
-    LOG("receive bytes : %.*s\n", length, data);
-    if(length == 5 && strncmp(data, "ping\n", 5) == 0)
-        SendData("pong", 4, socket);
-    else if(length == 5 && strncmp(data, "quit\n", 5) == 0) {
-        EnterCriticalSection(&socket->SockCritSec);
-        {
-            socket->state = Socket::SocketState::CLOSING;
-        }
-        LeaveCriticalSection(&socket->SockCritSec);
+void SocketManager::ChangeSocketState (Socket *sock, Socket::SocketState state){
+    EnterCriticalSection(&sock->SockCritSec);
+    {
+        sock->state = state;
     }
-    return 1;
+    LeaveCriticalSection(&sock->SockCritSec);
 }
 
 bool SocketManager::SendData(const char *data, u_long length, Socket *socket) {
@@ -248,10 +241,7 @@ void SocketManager::HandleRead(Socket *sockObj, Buffer *buf, DWORD bytesTransfer
             Buffer::Delete(buf);
         else if(PostRecv(sockObj, buf) == SOCKET_ERROR) {
             LOG("PostRecv failed!\n");
-            EnterCriticalSection(&sockObj->SockCritSec);
-            {
-                sockObj->state = Socket::SocketState::FAILURE;
-            }
+            ChangeSocketState(sockObj, Socket::SocketState::FAILURE);
             LeaveCriticalSection(&sockObj->SockCritSec);
             Buffer::Delete(buf);
         }
@@ -259,11 +249,7 @@ void SocketManager::HandleRead(Socket *sockObj, Buffer *buf, DWORD bytesTransfer
     else {
         LOG("Received 0 byte\n");
         // Graceful close - the receive returned 0 bytes read
-        EnterCriticalSection(&sockObj->SockCritSec);
-        {
-            sockObj->state = Socket::SocketState::CLOSING;
-        }
-        LeaveCriticalSection(&sockObj->SockCritSec);
+        ChangeSocketState(sockObj, Socket::SocketState::CLOSING);
         // Free the receive buffer
         Buffer::Delete(buf);
     }
@@ -280,11 +266,7 @@ void SocketManager::HandleWrite(Socket *sockObj, Buffer *buf, DWORD bytesTransfe
     }
     LeaveCriticalSection(&sockObj->SockCritSec);
     if (bytesTransfered < buf->bufLen){ //incomplete send, very small chance of it ever happening, socket send stream most probably corrupted
-        EnterCriticalSection(&sockObj->SockCritSec);
-        {
-            sockObj->state = Socket::SocketState::FAILURE;
-        }
-        LeaveCriticalSection(&sockObj->SockCritSec);
+        ChangeSocketState(sockObj, Socket::SocketState::FAILURE);
     }
 
     Buffer::Delete(buf);
@@ -308,11 +290,7 @@ void SocketManager::HandleConnection(Socket *sockObj, Buffer *buf) {
         AddSocketToMap(sockObj, Misc::CreateNilUUID());
         AcceptNewSocket(listenSocketObj);
     }
-    EnterCriticalSection(&sockObj->SockCritSec);
-    {
-        sockObj->state = Socket::SocketState::CONNECTED;
-    }
-    LeaveCriticalSection(&sockObj->SockCritSec);
+    ChangeSocketState(sockObj, Socket::SocketState::CONNECTED);
     // ----------------------------- set needed options
     err = SetSocketOption(sockObj->s, option, optPtr, optSize);
     // ----------------------------- trigger first recv
@@ -322,16 +300,15 @@ void SocketManager::HandleConnection(Socket *sockObj, Buffer *buf) {
         LOG("PostRecv failed!\n");
     }
     // ----------------------------- track isb
-    Buffer *isbBuf = Buffer::Create(inUseBufferList, Buffer::Operation::ISBChange);
-    UpdateISB(sockObj, isbBuf);
+    if (isbFactor > 0) {
+        Buffer *isbBuf = Buffer::Create(inUseBufferList, Buffer::Operation::ISBChange);
+        UpdateISB(sockObj, isbBuf);
+    }
 
     if (err != NO_ERROR){
-        EnterCriticalSection(&sockObj->SockCritSec);
-        {
-            sockObj->state = Socket::SocketState::FAILURE;
-        }
-        LeaveCriticalSection(&sockObj->SockCritSec);
+        ChangeSocketState(sockObj, Socket::SocketState::FAILURE);
         Buffer::Delete(buf);
+        Socket::DeleteOrDisconnect(sockObj, socketAccessMap);
     }
 }
 
@@ -364,7 +341,7 @@ void SocketManager::UpdateISB(Socket *sockObj, Buffer *buf) {
     }
     LOG("isb changed to %lu\n", isbVal);
     SetSocketOption(sockObj->s, SO_SNDBUF, (char*)&isbVal, sizeof(isbVal));
-    sockObj->maxPendingByteSent = isbVal*2;
+    sockObj->maxPendingByteSent = isbVal*isbFactor;
 }
 
 DWORD WINAPI SocketManager::IOCPWorkerThread(LPVOID lpParam) {
@@ -408,8 +385,8 @@ DWORD WINAPI SocketManager::IOCPWorkerThread(LPVOID lpParam) {
     return NO_ERROR;
 }
 
-SocketManager::SocketManager(Type type_) : state(State::NOT_INITIALIZED), type(type_),
-                                           iocpHandle(INVALID_HANDLE_VALUE), currentAcceptSocket(nullptr) {
+SocketManager::SocketManager(Type t, unsigned short factor) :   state(State::NOT_INITIALIZED), type(t), isbFactor(factor),
+                                                                iocpHandle(INVALID_HANDLE_VALUE), currentAcceptSocket(nullptr) {
     int         res;
 
     // ----------------------------- start WSA

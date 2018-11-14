@@ -130,12 +130,30 @@ class Socket : public ListElt<Socket> {     // Contains all needed information a
     friend class ListElt;
 
 public:
+    enum SocketState {
+        INIT,
+        ASSOCIATED,
+        BOUND,
+        RETRY_CONNECTION,
+        DISCONNECTED,
+        LISTENING,
+        ACCEPTING,
+        CONNECT_FAILURE,
+        CONNECTED,
+        CLOSING,
+        FAILURE,
+        DISCONNECTING,
+        CLOSED
+    };
+
     Socket(CriticalRecyclableList<Socket> &l, SocketManager *c, SOCKET s_, int af_) : ListElt(l), id(), address(""), port(0),
                                                                             s(s_), af(af_), state(SocketState::INIT),
-                                                                            OutstandingRecv(0), OutstandingSend(0), pendingByteSent(0),
+                                                                            OutstandingRecv(0), OutstandingSend(0),
+                                                                            pendingByteSent(0), maxPendingByteSent(0),
                                                                             SockCritSec{}, client(c), timeWaitStartTime(0) {
         InitializeCriticalSection(&SockCritSec);
     }
+
     ~Socket(){
         DeleteCriticalSection(&SockCritSec);
     }
@@ -157,23 +175,7 @@ public:
         it = sock.it;
         return *this;
     }
-
 private:
-    enum SocketState {
-        INIT,
-        ASSOCIATED,
-        BOUND,
-        DISCONNECTED,
-        LISTENING,
-        ACCEPTING,
-        RETRY_CONNECTION,
-        CONNECT_FAILURE,
-        CONNECTED,
-        CLOSING,
-        FAILURE,
-        DISCONNECTING,
-        CLOSED
-    };
 
     UUID                        id;                     // Socket unique identifier (used to store it in a map
     SOCKET                      s;                      // Socket handle
