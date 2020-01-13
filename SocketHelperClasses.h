@@ -177,7 +177,7 @@ public:
     }
 private:
 
-    UUID                        id;                     // Socket unique identifier (used to store it in a map
+    UUID                        id;                     // Socket unique identifier (used to store it in a map)
     SOCKET                      s;                      // Socket handle
     const char *                address;                // IP address of connection
     u_short                     port;                   // Port of connection

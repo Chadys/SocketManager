@@ -4,7 +4,19 @@
 #include <string>
 #include <windows.h>
 
+#define DEBUG
+#ifndef DEBUG
+#define LOG(...) if(false);
+#else
 #define LOG(text...) setbuf(stdout, 0); printf("%s : ", __func__); printf(text);
+#endif
+
+#define DEBUG_ERROR
+#ifndef DEBUG_ERROR
+#define LOG_ERROR(...) if(false);
+#else
+#define LOG_ERROR(text...) setbuf(stderr, 0); fprintf(stderr, "%s : ", __func__); fprintf(stderr, text);
+#endif
 
 namespace Misc {
     int GetRegistryValue(const TCHAR *regSubKey, const TCHAR *regValue, std::basic_string<TCHAR> &valueFromRegistry);

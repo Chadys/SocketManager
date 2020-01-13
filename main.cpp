@@ -87,7 +87,7 @@ int idleExample(int argc){
                             socketId = manager.ConnectToNewSocket(address, port);
                     }
                     /*
-                    for (int i = 1; i < 65536; i+=1000, i = i == 66000 ? 65536 : i) {
+                    for (int i = 1; i < 65536; i = i == 65000 ? 65536 : i + 1000) {
                         manager.SendData(data, i, socketId);
                     }
                     */

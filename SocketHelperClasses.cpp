@@ -70,7 +70,7 @@ void Socket::Disconnect(CriticalMap<UUID, Socket*> &critMap) {
                                     0                            // reserved : Reserved. Must be zero. If nonzero, WSAEINVAL is returned.
     )) {
         if ((err = WSAGetLastError()) != WSA_IO_PENDING) {
-            LOG("DisconnectEx failed: %d\n", err);
+            LOG_ERROR("DisconnectEx failed: %d\n", err);
             state = Socket::SocketState::FAILURE;
             LeaveCriticalSection(&SockCritSec);
             return Socket::DeleteOrDisconnect(this, critMap);
@@ -88,10 +88,10 @@ void Socket::Close(bool forceClose) {
     // ----------------------------- shutdown connexion
         if (shutdown(s, SD_SEND) == SOCKET_ERROR) {
             err = WSAGetLastError();
-            LOG("shutdown failed / error %d\n", err);
             if (err == WSAEINPROGRESS) {
                 return;
             }
+            LOG_ERROR("shutdown failed / error %d\n", err);
             forceClose = true;
         }
     }
@@ -106,16 +106,16 @@ void Socket::Close(bool forceClose) {
                        sizeof(sl)                           //optlen : The size, in bytes, of the buffer pointed to by the optval parameter.
         ) == SOCKET_ERROR ) {
             err = WSAGetLastError();
-            LOG("setsockopt failed / error %d\n", err);
+            LOG_ERROR("setsockopt failed / error %d\n", err);
         }
     }
     // ----------------------------- graceful or abortive close depending on if shutdown failed
     if (closesocket(s) == SOCKET_ERROR) {
         err = WSAGetLastError();
-        LOG("closesocket failed / error %d\n", err);
         if (err == WSAEINPROGRESS) {
             return;
         }
+        LOG_ERROR("closesocket failed / error %d\n", err);
     }
     s = INVALID_SOCKET;
     state = CLOSED;

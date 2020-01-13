@@ -4,10 +4,6 @@
 #include "SocketHelperClasses.h"
 #include <vector>
 
-#define DEBUG
-#ifndef DEBUG
-#define _cprintf(...) if(false);
-#endif
 
 class SocketManager {                            // Manage a client connected to an arbitrary number of socket server
     friend class Socket;
@@ -54,16 +50,16 @@ private:
 
     /************************ Attributes **************************/
 
+    CriticalRecyclableList<Socket>  inUseSocketList;            // All sockets this instance is currently connected to (linked list are used here because pointers to its elements are used elsewhere and it's the only container to guarantee they will never be moved once allocated, no matter what operation is done on the list)
     CriticalRecyclableList<Buffer>  inUseBufferList;            // All buffers currently used in an overlapped operation
-    CriticalRecyclableList<Socket>  inUseSocketList;            // All sockets this instance is currently connected to
     CriticalQueue<Socket*>          reusableSocketQueue;        // All sockets previously disconnected that can be reused
-    Socket*                         currentAcceptSocket;        // Last accept socket if manager is in server mode (because event is raised in the listen socket
+    Socket*                         currentAcceptSocket;        // Last accept socket if manager is in server mode (because event is raised in the listen socket)
     CriticalMap<UUID, Socket*>      socketAccessMap;            // Only way to access a socket pointer from outside of this class, to prevent invalid memory access
 
     State                           state;                      // Current state of this instance, used for cleanup and to test readiness
     std::vector<HANDLE>             threadHandles;              // Handles to all threads receiving IOCP events
     HANDLE                          iocpHandle;                 // Handle to IO completion port
-    unsigned short                  isbFactor;                  // Factor of isb that send buffer can fill before no send send are allowed (0 for no limit)
+    unsigned short                  isbFactor;                  // Factor of isb that sendbuffer can fill before no new send are allowed (0 for no limit)
 protected:
     Type                            type;                       // Type of this manager, either client or server
     //////////////////////// End Attributes ///////////////////////
@@ -117,7 +113,7 @@ public:
      * Since a single read can be received by different threads,
      * keep a map socket->buffer as attribute inside your implementing class
      * override ReceiveData to fill this buffer
-     * (using a CRITICAL_SECTION for the whole map or a per-entry one depending on the number of socket you expect)
+     * (using a CRITICAL_SECTION for the whole map or a per-entry one depending on the number of sockets you expect)
      * and send an event to another thread(s) managing this map if the end of the buffer was detected
      * (the detection depends on your communication protocol)
      * */
