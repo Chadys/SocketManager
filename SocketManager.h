@@ -9,7 +9,7 @@ class SocketManager {                            // Manage a client connected to
     friend class Socket;
 
 private:
-    /************************ Attributes **************************/
+    /********************** Static Attributes ************************/
 
     static const int            FAMILY                          = AF_INET;      // IPv4 address family.
     static const int            THREADS_PER_PROC                = 1;
@@ -17,7 +17,7 @@ private:
     static const int            DEFAULT_TIME_WAIT_VALUE         = 120000;       // Either 120 or 240sec depending on doc page, but tests confirmed 120 (https://docs.microsoft.com/en-us/biztalk/technical-guides/settings-that-can-be-modified-to-improve-network-performance | https://docs.microsoft.com/en-us/previous-versions/windows/it-pro/windows-2000-server/cc938217(v=technet.10))
     static const int            MIN_TIME_WAIT_VALUE             = 30000;        // Range goes from 30 to 300sec according to microsoft doc
     static const int            MAX_TIME_WAIT_VALUE             = 300000;       // Range goes from 30 to 300sec according to microsoft doc
-    static const LONG64         DEFAULT_MAX_PENDING_BYTE_SENT   = 65536;        // 64k, default value
+    static const LONG64         DEFAULT_MAX_PENDING_BYTE_SENT   = 65536;        // 64k, default value only if isb query fail (shouldn't happen)
     static const TCHAR *        TIME_WAIT_REG_KEY;
     static const TCHAR *        TIME_WAIT_REG_VALUE;
     static DWORD                TimeWaitValue;
@@ -25,9 +25,9 @@ private:
     static LPFN_DISCONNECTEX    DisconnectEx;
     static LPFN_ACCEPTEX        AcceptEx;
 
-    //////////////////////// End Attributes ///////////////////////
+    ////////////////////// End Static Attributes /////////////////////
 
-    /************************ Internal def **************************/
+    /************************ Internal def *************************/
 public:
     enum Type {
         CLIENT,
@@ -46,9 +46,9 @@ private:
         SERVER_LISTENING
     };
 
-    //////////////////////// End Internal def ///////////////////////
+    //////////////////////// End Internal def //////////////////////
 
-    /************************ Attributes **************************/
+    /************************ Attributes *************************/
 
     CriticalRecyclableList<Socket>  inUseSocketList;            // All sockets this instance is currently connected to (linked list are used here because pointers to its elements are used elsewhere and it's the only container to guarantee they will never be moved once allocated, no matter what operation is done on the list)
     CriticalRecyclableList<Buffer>  inUseBufferList;            // All buffers currently used in an overlapped operation
@@ -62,7 +62,7 @@ private:
     unsigned short                  isbFactor;                  // Factor of isb that sendbuffer can fill before no new send are allowed (0 for no limit)
 protected:
     Type                            type;                       // Type of this manager, either client or server
-    //////////////////////// End Attributes ///////////////////////
+    //////////////////////// End Attributes //////////////////////
 
     /************************ Methods **************************/
 private:
@@ -90,12 +90,14 @@ private:
     bool                BindSocket              (Socket *sockObj, SOCKADDR_IN sockAddr);                // Bind socket to given address, delete it if failure
     int                 SetSocketOption         (SOCKET s, int option, const char *optPtr, int optSize);// Set a socket option to a given value and return error status
     inline int          SetSocketOption         (SOCKET s, int option, bool value)                      { return SetSocketOption(s, option, (const char*)&value, sizeof(value)); }
+    int                 GetSocketOption         (SOCKET s, int option, char *optPtr, int optSize);      // Get the value of a given socket option and return error status
     void                AddSocketToMap          (Socket *sockObj, UUID id);                             // Give unique id to socket and add it to access map
     bool                AcceptNewSocket         (Socket *listenSockObj);                                // Create a new socket waiting to accept new connection
+    void                ChangeSocketState       (Socket *sock, Socket::SocketState state);              // Change the state of a socket (for manual close or failure for example)
 protected:
-    int                 GetSocketOption         (SOCKET s, int option, char *optPtr, int optSize);      // Get the value of a given socket option and return error status
+    inline void         CloseSocket             (Socket *sock)                                          { ChangeSocketState(sock, Socket::SocketState::CLOSING); }
     bool                SendData                (const char *data, u_long length, Socket *socket);      // Send a given buffer to the given socket
-    void                ChangeSocketState       (Socket *sock, Socket::SocketState state);              // Change the state of a socket (for manual close for example
+    virtual int         ReceiveData             (const char* data, u_long length, Socket *socket) = 0;  // Do what needs to be done when receiving content from a socket
 public:
     explicit            SocketManager           (Type t, unsigned short factor = 0);
                         ~SocketManager          ();
@@ -107,16 +109,6 @@ public:
     inline bool         isServerSocketReady     (UUID socketId)                                         { Socket *sockObj = socketAccessMap.Get(socketId); return sockObj != nullptr && sockObj->state == Socket::SocketState::LISTENING; };
     inline bool         SendData                (const char *data, u_long length, UUID socketId)        { return SendData(data, length, socketAccessMap.Get(socketId)); }
     inline int          SendDataToAll           (const char *data, u_long length)                       { int nbSucc = 0; for (Socket& sock : inUseSocketList.list) nbSucc += SendData(data, length, &sock); return nbSucc; }
-    virtual int         ReceiveData             (const char* data, u_long length, Socket *socket) = 0;  // Do what needs to be done when receiving content from a socket
-
-    /* Implementation recommendation :
-     * Since a single read can be received by different threads,
-     * keep a map socket->buffer as attribute inside your implementing class
-     * override ReceiveData to fill this buffer
-     * (using a CRITICAL_SECTION for the whole map or a per-entry one depending on the number of sockets you expect)
-     * and send an event to another thread(s) managing this map if the end of the buffer was detected
-     * (the detection depends on your communication protocol)
-     * */
 
     //////////////////////// End Methods ///////////////////////
 };

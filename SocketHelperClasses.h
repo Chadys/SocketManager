@@ -149,7 +149,7 @@ public:
     Socket(CriticalRecyclableList<Socket> &l, SocketManager *c, SOCKET s_, int af_) : ListElt(l), id(), address(""), port(0),
                                                                             s(s_), af(af_), state(SocketState::INIT),
                                                                             OutstandingRecv(0), OutstandingSend(0),
-                                                                            pendingByteSent(0), maxPendingByteSent(0),
+                                                                            pendingByteSent(0), maxPendingByteSent(DEFAULT_MAX_PENDING_BYTE_SENT),
                                                                             SockCritSec{}, client(c), timeWaitStartTime(0) {
         InitializeCriticalSection(&SockCritSec);
     }
@@ -177,19 +177,20 @@ public:
     }
 private:
 
-    UUID                        id;                     // Socket unique identifier (used to store it in a map)
-    SOCKET                      s;                      // Socket handle
-    const char *                address;                // IP address of connection
-    u_short                     port;                   // Port of connection
-    SocketState                 state;                  // State the socket is in
-    int                         af;                     // Address family of socket
-    volatile LONG               OutstandingRecv,        // Number of outstanding overlapped ops on
+    UUID                        id;                             // Socket unique identifier (used to store it in a map)
+    SOCKET                      s;                              // Socket handle
+    const char *                address;                        // IP address of connection
+    u_short                     port;                           // Port of connection
+    SocketState                 state;                          // State the socket is in
+    int                         af;                             // Address family of socket
+    volatile LONG               OutstandingRecv,                // Number of outstanding overlapped ops on
                                 OutstandingSend;
-    volatile LONG64             pendingByteSent;        // keep track of pending byte sent
-    CRITICAL_SECTION            SockCritSec;            // Protect access to this structure
-    SocketManager*              client;                 // Pointer to containing class
-    DWORD                       timeWaitStartTime;      // Counter to test if socket has gotten out of TIME_WAIT state after a disconnect
-    ULONG                       maxPendingByteSent;     // Max pending byte sent calculated using ISB, used as threshold to prevent more send if memory becomes limited
+    volatile LONG64             pendingByteSent;                // keep track of pending byte sent
+    CRITICAL_SECTION            SockCritSec;                    // Protect access to this structure
+    SocketManager*              client;                         // Pointer to containing class
+    DWORD                       timeWaitStartTime;              // Counter to test if socket has gotten out of TIME_WAIT state after a disconnect
+    ULONG                       maxPendingByteSent;             // Max pending byte sent calculated using ISB, used as threshold to prevent more send if memory becomes limited
+    static const ULONG          DEFAULT_MAX_PENDING_BYTE_SENT   = 65536;    //64k
 
     static void     Delete                  (Socket *obj);                                          // Close socket before deleting it
     static void     DeleteOrDisconnect      (Socket *obj, CriticalMap<UUID, Socket*> &critMap);     // Try to disconnect socket for reuse or close and delete it if is is not possible

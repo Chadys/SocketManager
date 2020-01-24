@@ -7,9 +7,9 @@ private:
     int ReceiveData(const char *data, u_long length, Socket *socket) final {
         LOG("receive bytes : %.*s\n", length, data);
         if(length == 5 && strncmp(data, "ping\n", 5) == 0)
-            SendData("pong", 4, socket);
+            SendData("pong\n", 5, socket);
         else if(length == 5 && strncmp(data, "quit\n", 5) == 0) {
-            ChangeSocketState(socket, Socket::SocketState::CLOSING);
+            CloseSocket(socket);
         }
         return 1;
     }
@@ -21,7 +21,8 @@ static const u_short    port                    = 55555;
 
 
 int pingpongStressTest(){
-    static const int N = 1000;
+    static const int N = 10;
+    static const int N2 = 5; //0 for infinite test
 
     RPC_STATUS                  status;
     SocketManagerImplExample    serverManager(SocketManager::Type::SERVER);
@@ -50,8 +51,14 @@ int pingpongStressTest(){
                 Sleep(100);
             else
                 return 1;
+        } else {
+            break;
         }
-        serverManager.SendDataToAll("ping\n", 5);
+    }
+
+    for (int i = 0 ; N2 == 0 || i < N2 ; i++) {
+        int n = serverManager.SendDataToAll("ping\n", 5);
+        LOG("Sent ping data to %d sockets\n", n);
     }
     return 0;
 }
@@ -95,9 +102,11 @@ int idleExample(int argc){
             }
         }
     }
+    return 0;
 }
 
 int main(int argc, char *argv[]){
-    return idleExample(argc);
+    return pingpongStressTest();
+//    return idleExample(argc);
 }
 

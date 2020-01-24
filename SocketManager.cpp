@@ -335,7 +335,7 @@ void SocketManager::UpdateISB(Socket *sockObj, Buffer *buf) {
     if (PostISBNotify(sockObj, buf) == SOCKET_ERROR ||
         (idealsendbacklogquery(sockObj->s, &isbVal) == SOCKET_ERROR && (queryFail = true))){
         if (queryFail) {
-            LOG_ERROR("idealsendbacklognotify failed: %d\n", WSAGetLastError());
+            LOG_ERROR("idealsendbacklogquery failed: %d\n", WSAGetLastError());
         }
         isbVal = DEFAULT_MAX_PENDING_BYTE_SENT;
     }
